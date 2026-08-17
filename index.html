@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>透视原理 · 互动演示</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- 顶部应用栏 -->
+  <header id="toolbar" class="appbar">
+    <div class="appbar-brand">
+      <svg class="appbar-icon" viewBox="0 0 24 24" width="26" height="26" aria-hidden="true">
+        <path fill="currentColor" d="M3 8.5 12 3l9 5.5-9 5.5zM3 15.5 12 21l9-5.5-9-5.5z" opacity=".55"/>
+        <path fill="currentColor" d="M12 8.5 21 14l-9 5.5L3 14z"/>
+      </svg>
+      <span class="appbar-title">透视原理 · 互动演示</span>
+    </div>
+
+    <div class="segmented" role="group" aria-label="工具切换">
+      <button class="tool-btn segmented-btn select-btn active" data-tool="select" title="选择/查看：点击物体选中或切换，点击空白取消选中；拖动旋转视图，Shift+拖动平移，Ctrl/⌘+滚轮缩放">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="6.5" y="3" width="11" height="18" rx="5.5"/>
+          <path d="M12 3v6"/>
+        </svg>
+      </button>
+      <button class="tool-btn segmented-btn" data-tool="move" title="拖动人眼 / 立方体 / 画布">移动</button>
+      <button class="tool-btn segmented-btn" data-tool="rotate" title="改变方向 / 朝向">旋转</button>
+      <button class="tool-btn segmented-btn" data-tool="scale" title="调整立方体大小">缩放</button>
+    </div>
+
+    <div class="appbar-actions">
+      <button id="btn-add" class="m3-btn m3-btn-filled">＋ 添加立方体</button>
+      <button id="btn-reset" class="m3-btn m3-btn-tonal">重置</button>
+    </div>
+  </header>
+
+  <!-- 主舞台 -->
+  <main id="stage">
+    <canvas id="scene"></canvas>
+
+    <!-- 人眼视图悬浮按钮 -->
+    <button id="btn-eyeview" class="fab-eye" title="人眼视图">
+      <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M1 12s3-7 11-7 11 7 11 7-3 7-11 7-11-7-11-7z"/>
+        <circle cx="12" cy="12" r="2.5"/>
+      </svg>
+    </button>
+
+    <aside id="panel">
+      <section class="m3-card">
+        <h3 class="m3-card-title">视图选项</h3>
+        <label class="m3-switch"><input type="checkbox" id="opt-showSightLine" checked><span class="track"><span class="thumb"></span></span><span class="label">视线（观察方向）</span></label>
+        <label class="m3-switch"><input type="checkbox" id="opt-showFrustum" checked><span class="track"><span class="thumb"></span></span><span class="label">视锥</span></label>
+        <div class="m3-slider-row">
+          <span class="slider-label">视锥角度</span>
+          <input type="range" id="frustumAngle" min="5" max="75" step="1" value="45" aria-label="视锥角度">
+          <span id="frustumVal" class="slider-val">45°</span>
+        </div>
+        <div class="m3-slider-row">
+          <span class="slider-label">滚动缩放灵敏度</span>
+          <input type="range" id="zoomSens" min="5" max="200" step="5" value="50" aria-label="滚动缩放灵敏度">
+          <span id="zoomSensVal" class="slider-val">50%</span>
+        </div>
+        <label class="m3-switch"><input type="checkbox" id="opt-showProjectionLines" checked><span class="track"><span class="thumb"></span></span><span class="label">投影连线（点 ↔ 人眼 ↔ 画布）</span></label>
+        <label class="m3-switch"><input type="checkbox" id="opt-showPerspective" checked><span class="track"><span class="thumb"></span></span><span class="label">画布上的平行透视图形</span></label>
+        <label class="m3-switch"><input type="checkbox" id="opt-showLabels" checked><span class="track"><span class="thumb"></span></span><span class="label">物体标签</span></label>
+      </section>
+
+      <section class="m3-card" id="sel-panel" hidden>
+        <h3 class="m3-card-title" id="sel-name">立方体</h3>
+        <div id="sel-size" class="sel-info"></div>
+        <label class="m3-switch"><input type="checkbox" id="opt-showParallelLines" checked><span class="track"><span class="thumb"></span></span><span class="label">显示平行线（3 组 3 色虚线）</span></label>
+        <label class="m3-switch"><input type="checkbox" id="opt-showVanishingPoints" checked><span class="track"><span class="thumb"></span></span><span class="label">显示灭点</span></label>
+        <div class="legend">
+          <span class="lg" style="--c:#e67e22">方向 1</span>
+          <span class="lg" style="--c:#27ae60">方向 2</span>
+          <span class="lg" style="--c:#8e44ad">方向 3</span>
+        </div>
+        <button id="btn-delete" class="m3-btn m3-btn-error">删除此立方体</button>
+      </section>
+
+      <section class="m3-card">
+        <h3 class="m3-card-title">画布</h3>
+        <label class="m3-switch"><input type="checkbox" id="opt-lockCanvas" checked><span class="track"><span class="thumb"></span></span><span class="label">锁定画布垂直于视线</span></label>
+        <div class="m3-slider-row">
+          <span class="slider-label">画布大小</span>
+          <input type="range" id="canvasSize" min="0" max="2" step="0.01" value="1" aria-label="画布大小">
+          <span id="canvasSizeVal" class="slider-val">100%</span>
+        </div>
+      </section>
+    </aside>
+  </main>
+
+  <!-- 底部状态栏 -->
+  <footer id="statusbar" class="statusbar">
+    <span id="status">移动：拖拽人眼/立方体/画布；空白处拖动旋转视图，滚轮缩放</span>
+    <span id="info"></span>
+  </footer>
+</div>
+
+<script src="js/math.js?v=8"></script>
+<script src="js/scene.js?v=8"></script>
+<script src="js/renderer.js?v=8"></script>
+<script src="js/interaction.js?v=8"></script>
+<script src="js/ui.js?v=8"></script>
+<script src="js/main.js?v=8"></script>
+</body>
+</html>
