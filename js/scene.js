@@ -20,6 +20,7 @@ PP.App = {
     h: 9,
     size: 1,          // 画布显示大小（0~2，0 = 隐藏画布）
     lockToEye: true,
+    shape: 'flat',    // 'flat' 平面 | 'sphere' 球形 | 'cylinder' 圆柱（模拟鱼眼透视）
   },
   cubes: [],
   camera: {
@@ -142,7 +143,7 @@ PP.resetScene = function () {
   PP.App.selectedId = null;
   Object.assign(PP.App.eye, { pos: M3.v3(0, 3.5, 10), yaw: Math.PI, pitch: -0.4228 });
   PP.setEyeDir();
-  Object.assign(PP.App.canvas, { center: M3.v3(0, 1.6, 3), normal: M3.v3(0, 0, 1), w: 12, h: 9, size: 1, lockToEye: true });
+  Object.assign(PP.App.canvas, { center: M3.v3(0, 1.6, 3), normal: M3.v3(0, 0, 1), w: 12, h: 9, size: 1, lockToEye: true, shape: 'flat' });
   Object.assign(PP.App.camera, { target: M3.v3(0, 1.5, 0.5), yaw: 0.62, pitch: 0.38, dist: 22, fov: 45 });
   PP.App.tool = 'select';
   PP.App.eyeView = false;

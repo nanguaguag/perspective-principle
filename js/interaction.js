@@ -258,15 +258,80 @@ PP.Interaction.onMouseUp = function () {
 };
 
 PP.Interaction.onWheel = function (e) {
+  // 侧边栏等 UI 区域交给浏览器原生滚动（不拦截、不 preventDefault）
+  const panel = document.getElementById('panel');
+  if (panel && panel.contains(e.target)) return;
   e.preventDefault();
   const app = PP.App;
-  // 选择工具下必须按住 Ctrl/⌘ 才缩放，避免触控板误触（普通滚动仅移动页面/不缩放）
-  if (app.tool === 'select' && !(e.ctrlKey || e.metaKey)) return;
-  // 按灵敏度把滚动量转成缩放比例（连续、幅度感知，触控板不再跳变）
   const sens = app.options.zoomSensitivity;
+
+  // 触控板捏合缩放：macOS 以 ctrlKey + wheel 事件发送（沿用现有行为）
+  if (e.ctrlKey || e.metaKey) {
+    const raw = M3.clamp(e.deltaY, -240, 240);
+    const k = Math.exp(raw * sens * 0.0012);
+    app.camera.dist = M3.clamp(app.camera.dist * k, 10, 60);
+    return;
+  }
+
+  // 选择工具下启用触控板手势：
+  // 双指滚动 = 旋转视角，Shift+双指滚动 = 平移（与鼠标拖动方向一致）
+  if (app.tool === 'select') {
+    const px = this._wheelPixels(e);
+    // 触控板双指滚动单帧位移很小；物理滚轮一档很大（~100px+），保持原有"仅 Ctrl 缩放"行为
+    const isTrackpad = Math.abs(px.dx) + Math.abs(px.dy) < 80;
+    if (!isTrackpad) return;
+    if (e.shiftKey) this._trackpadPan(px.dx, px.dy);
+    else this._trackpadOrbit(px.dx, px.dy);
+    return;
+  }
+
+  // 非选择工具：滚轮缩放（原有行为）
   const raw = M3.clamp(e.deltaY, -240, 240);
   const k = Math.exp(raw * sens * 0.0012);
   app.camera.dist = M3.clamp(app.camera.dist * k, 10, 60);
+};
+
+// 把 wheel 增量归一化为像素（deltaMode: 0=像素, 1=行, 2=页）
+PP.Interaction._wheelPixels = function (e) {
+  let dx = e.deltaX || 0, dy = e.deltaY || 0;
+  if (e.deltaMode === 1) { dx *= 16; dy *= 16; }
+  else if (e.deltaMode === 2) { dx *= PP.Renderer.W; dy *= PP.Renderer.H; }
+  return { dx, dy };
+};
+
+// 触控板双指滚动 → 旋转视角（与鼠标拖动同向；人眼视图下转视线方向）
+// 触控板自然滚动的 deltaX/deltaY 与鼠标位移符号相反（手指向右→deltaX<0 等），
+// 因此这里与鼠标拖拽公式符号相反，才能得到相同的手感
+PP.Interaction._trackpadOrbit = function (dx, dy) {
+  const app = PP.App;
+  const speed = 0.005;
+  if (app.eyeView) {
+    app.eye.yaw = app.eye.yaw + dx * speed;
+    app.eye.pitch = M3.clamp(app.eye.pitch + dy * speed, -Math.PI / 2 + 0.01, Math.PI / 2 - 0.01);
+    PP.setEyeDir();
+    return;
+  }
+  app.camera.yaw = app.camera.yaw + dx * speed;
+  app.camera.pitch = M3.clamp(app.camera.pitch - dy * speed, -Math.PI / 2 + 0.05, Math.PI / 2 - 0.05);
+};
+
+// 触控板 Shift+双指滚动 → 平移视点（与鼠标 Shift+拖动同向：画面跟随手指）
+PP.Interaction._trackpadPan = function (dx, dy) {
+  const app = PP.App;
+  const basis = PP.Renderer.basis;
+  const fov = PP.Renderer.fov * Math.PI / 180;
+  if (app.eyeView) {
+    // 人眼视图下平移人眼本身（沿屏幕方向），比例取 人眼→画布 的距离
+    const D = M3.dist(app.eye.pos, app.canvas.center);
+    const k = (2 * D * Math.tan(fov / 2)) / PP.Renderer.H;
+    const move = M3.add(M3.scale(basis.right, dx * k), M3.scale(basis.up, -dy * k));
+    app.eye.pos = M3.add(app.eye.pos, move);
+    return;
+  }
+  const cam = app.camera;
+  const k = (2 * cam.dist * Math.tan(fov / 2)) / PP.Renderer.H;
+  const move = M3.add(M3.scale(basis.right, dx * k), M3.scale(basis.up, -dy * k));
+  cam.target = M3.add(cam.target, move);
 };
 
 PP.Interaction.onKeydown = function (e) {

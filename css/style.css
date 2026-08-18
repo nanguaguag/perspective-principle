@@ -122,6 +122,9 @@ button {
   justify-content: center;
   padding: 0 14px;
 }
+/* 面板内紧凑分段选择器 */
+.seg-sm { margin: 0 0 12px; }
+.seg-sm .segmented-btn { height: 32px; padding: 0 13px; font-size: 13px; }
 
 .appbar-actions { display: flex; gap: 10px; white-space: nowrap; }
 
@@ -238,6 +241,7 @@ button {
 .m3-btn-filled:hover { box-shadow: var(--md-elev-2); filter: brightness(1.05); }
 .m3-btn-tonal { background: var(--md-secondary-container); color: var(--md-on-secondary-container); }
 .m3-btn-tonal:hover { box-shadow: var(--md-elev-1); filter: brightness(1.08); }
+.m3-btn-tonal.active { background: var(--md-primary-container); color: var(--md-on-primary-container); box-shadow: var(--md-elev-1); }
 .m3-btn-error { background: var(--md-error-container); color: var(--md-error); width: 100%; }
 .m3-btn-error:hover { box-shadow: var(--md-elev-1); filter: brightness(1.12); }
 

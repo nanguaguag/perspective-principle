@@ -30,10 +30,17 @@ PP.Renderer.resize = function (canvas) {
 };
 
 // 世界点 → 屏幕像素 (x,y) + 深度 z（相机空间）
+// 人眼视图 + 非平面画布 → 鱼眼投影（球/圆柱），用于展示曲面上的灭点形成
 PP.Renderer.worldToScreen = function (wp) {
   const cam = PP.App.camera;
   const cs = M3.toCamSpace(wp, cam.pos, this.basis);
   if (cs.z < 0.1) return null; // 在相机后方
+  const shape = PP.App.canvas.shape || 'flat';
+  if (PP.App.eyeView && shape !== 'flat') {
+    const sp = this._fisheyeScreen(cs);
+    if (!sp) return null;
+    return { x: sp.x, y: sp.y, z: cs.z };
+  }
   const p = M3.projectCam(cs, this.fov, this.W / this.H);
   return {
     x: (p.sx + 1) * 0.5 * this.W,
@@ -42,9 +49,90 @@ PP.Renderer.worldToScreen = function (wp) {
   };
 };
 
+// 鱼眼：把相机空间方向(cs, forward=+z)映射到屏幕像素
+PP.Renderer._fisheyeScreen = function (cs) {
+  const W = this.W, H = this.H;
+  const fovHalf = (this.fov * Math.PI / 180) / 2;
+  const shape = PP.App.canvas.shape;
+  const aspect = W / H;
+  if (shape === 'sphere') {
+    // 等距球面投影：半径按离轴角线性映射，方向角决定屏幕角度
+    const z = cs.z;
+    if (z <= 1e-4) return null;
+    const r = Math.hypot(cs.x, cs.y);
+    const alpha = Math.atan2(r, z);          // 离轴角 0..90°
+    const rad = (alpha / fovHalf) * (H / 2); // 视锥边缘 → 屏幕垂直半高
+    const beta = Math.atan2(-cs.y, cs.x);    // 相机 y 向上、屏幕 y 向下 → 取反，避免上下颠倒
+    return { x: W / 2 + rad * Math.cos(beta), y: H / 2 + rad * Math.sin(beta) };
+  }
+  if (shape === 'cylinder') {
+    // 柱面展开：绕圆柱轴（=画布 v 方向）的方位角 → x，相对 (u,n) 平面的俯仰角 → y
+    const cb = M3.canvasBasis(PP.App.canvas);
+    const b = this.basis;
+    // 相机空间方向 → 世界方向
+    const w = M3.add(
+      M3.add(M3.scale(b.right, cs.x), M3.scale(b.up, cs.y)),
+      M3.scale(b.forward, cs.z)
+    );
+    const du = M3.dot(w, cb.u), dv = M3.dot(w, cb.v), dn = M3.dot(w, cb.n);
+    const lh = Math.hypot(du, dn);
+    if (lh < 1e-6) return null; // 沿柱轴方向，方位角不确定
+    const theta = Math.atan2(du, dn);   // 方位角（n=0，u 方向为 +）
+    const phi = Math.atan2(dv, lh);     // 俯仰角（沿轴方向 ±90°）
+    const fovHalfH = Math.atan(Math.tan(fovHalf) * aspect); // 匹配视锥水平视场
+    const fovHalfV = fovHalf;
+    return {
+      x: W / 2 + (theta / fovHalfH) * (W / 2),
+      y: H / 2 + (phi / fovHalfV) * (H / 2),
+    };
+  }
+  return null;
+};
+
 // 屏幕 → 世界射线
 PP.Renderer.screenToWorld = function (mx, my) {
-  return M3.screenRay(mx, my, PP.App.camera, this.fov, this.W, this.H, this.basis);
+  const app = PP.App;
+  // 鱼眼（球/圆柱）视图下屏幕位置由 _fisheyeScreen 生成，
+  // 必须用其逆映射构造射线，拾取位置才能与渲染位置一致
+  if (app.eyeView && (app.canvas.shape || 'flat') !== 'flat') {
+    return this._fisheyeRay(mx, my);
+  }
+  return M3.screenRay(mx, my, app.camera, this.fov, this.W, this.H, this.basis);
+};
+
+// 鱼眼（球/圆柱）视图：屏幕像素 → 世界射线（_fisheyeScreen 的逆映射）
+PP.Renderer._fisheyeRay = function (mx, my) {
+  const W = this.W, H = this.H;
+  const fovHalf = (this.fov * Math.PI / 180) / 2;
+  const shape = PP.App.canvas.shape;
+  const cam = PP.App.camera;
+  const origin = M3.v3(cam.pos.x, cam.pos.y, cam.pos.z);
+  if (shape === 'sphere') {
+    const dx = mx - W / 2, dy = my - H / 2;
+    const rad = Math.hypot(dx, dy);
+    const beta = Math.atan2(dy, dx);          // 屏幕 y 向下
+    const alpha = Math.min((rad / (H / 2)) * fovHalf, Math.PI / 2 - 1e-3);
+    const s = Math.sin(alpha), c = Math.cos(alpha);
+    // 相机空间：x=右、y=上、z=前；与 _fisheyeScreen 的 y 取反对应
+    const dirCam = { x: s * Math.cos(beta), y: -s * Math.sin(beta), z: c };
+    const dir = M3.norm(M3.add(
+      M3.add(M3.scale(this.basis.right, dirCam.x), M3.scale(this.basis.up, dirCam.y)),
+      M3.scale(this.basis.forward, dirCam.z)
+    ));
+    return { origin, dir };
+  }
+  // 圆柱：与 _fisheyeScreen 的柱面展开对应（画布局部坐标 → 世界方向）
+  const aspect = W / H;
+  const fovHalfH = Math.atan(Math.tan(fovHalf) * aspect);
+  const theta = ((mx - W / 2) / (W / 2)) * fovHalfH;
+  const phi = ((my - H / 2) / (H / 2)) * fovHalf;
+  const cp = Math.cos(phi), sp = Math.sin(phi);
+  const cb = M3.canvasBasis(PP.App.canvas);
+  const dir = M3.norm(M3.add(
+    M3.add(M3.scale(cb.u, cp * Math.sin(theta)), M3.scale(cb.v, sp)),
+    M3.scale(cb.n, cp * Math.cos(theta))
+  ));
+  return { origin, dir };
 };
 
 /* ==================== 主渲染循环 ==================== */
@@ -234,10 +322,19 @@ PP.Renderer._scVec = function (list) {
   return list.map((p) => this._sc(p)).filter((s) => s !== null);
 };
 
-/* ==================== 1. 画布平面 ==================== */
+/* ==================== 1. 画布（平面/球/圆柱） ==================== */
 PP.Renderer.drawCanvasPlane = function (addDraw) {
   const c = PP.App.canvas;
   if (c.size <= 0) return; // size=0 → 隐藏画布
+  const shape = c.shape || 'flat';
+  if (shape === 'sphere') { this._drawSphereCanvas(addDraw); return; }
+  if (shape === 'cylinder') { this._drawCylinderCanvas(addDraw); return; }
+  this._drawFlatCanvas(addDraw);
+};
+
+// 平面画布：矩形 + 网格
+PP.Renderer._drawFlatCanvas = function (addDraw) {
+  const c = PP.App.canvas;
   const basis = M3.canvasBasis(c);
   const hw = (c.w * c.size) / 2, hh = (c.h * c.size) / 2;
   // 4 角
@@ -283,9 +380,114 @@ PP.Renderer.drawCanvasPlane = function (addDraw) {
   });
 };
 
+// 球形画布（球心=人眼）：三条正交大圆线框
+PP.Renderer._drawSphereCanvas = function (addDraw) {
+  const eye = PP.App.eye;
+  const R = M3.dist(eye.pos, PP.App.canvas.center) * PP.App.canvas.size;
+  const basis = M3.canvasBasis(PP.App.canvas);
+  const N = 48;
+  const rings = [
+    // 在 eye 处相互正交的三个平面圈
+    { a: basis.u, b: basis.v }, // 正对观察者的外缘
+    { a: basis.n, b: basis.u },
+    { a: basis.n, b: basis.v },
+  ];
+  for (const ring of rings) {
+    const pts = [];
+    for (let i = 0; i <= N; i++) {
+      const th = (i / N) * Math.PI * 2;
+      const d = M3.add(M3.scale(ring.a, Math.cos(th)), M3.scale(ring.b, Math.sin(th)));
+      pts.push(M3.add(eye.pos, M3.scale(d, R)));
+    }
+    this._drawRing(addDraw, pts, 'rgba(100,150,255,0.28)');
+  }
+};
+
+// 圆柱画布（轴=画布竖直方向 v，过 人眼；锁定画布时 v ⊥ 视线，母线 ⊥ 视线）
+PP.Renderer._drawCylinderCanvas = function (addDraw) {
+  const eye = PP.App.eye;
+  const c = PP.App.canvas;
+  const R = M3.dist(eye.pos, c.center) * c.size;
+  const halfH = (c.h * c.size) / 2;
+  const N = 40;
+  const basis = M3.canvasBasis(c);
+  const axis = basis.v;   // 圆柱轴 = 画布竖直方向
+  // 底部 / 中部 / 顶部 的圆环（在 ⊥ 轴的平面内，轴过 人眼）
+  for (const sy of [-1, 0, 1]) {
+    const center = M3.add(eye.pos, M3.scale(axis, sy * halfH));
+    const pts = [];
+    for (let i = 0; i <= N; i++) {
+      const th = (i / N) * Math.PI * 2;
+      const p = M3.add(center, M3.add(M3.scale(basis.u, Math.cos(th) * R), M3.scale(basis.n, Math.sin(th) * R)));
+      pts.push(p);
+    }
+    this._drawRing(addDraw, pts, 'rgba(100,150,255,0.22)');
+  }
+  // 母线（沿轴方向），围绕一圈
+  for (let k = 0; k < 12; k++) {
+    const th = (k / 12) * Math.PI * 2;
+    const hor = M3.add(M3.scale(basis.u, Math.cos(th) * R), M3.scale(basis.n, Math.sin(th) * R));
+    const pB = M3.add(M3.add(eye.pos, M3.scale(axis, -halfH)), hor);
+    const pT = M3.add(M3.add(eye.pos, M3.scale(axis, halfH)), hor);
+    const res = this._clipSegmentWorld(pB, pT);
+    if (!res) continue;
+    const avgZ = (res.a.z + res.b.z) / 2;
+    addDraw(avgZ, (ctx) => {
+      ctx.strokeStyle = 'rgba(100,150,255,0.20)';
+      ctx.lineWidth = 0.6;
+      ctx.beginPath(); ctx.moveTo(res.a.x, res.a.y); ctx.lineTo(res.b.x, res.b.y); ctx.stroke();
+    });
+  }
+};
+
+PP.Renderer._drawRing = function (addDraw, pts, color) {
+  const chain = [];
+  for (const p of pts) {
+    const s = this._sc(p);
+    if (s) chain.push({ x: s.x, y: s.y, z: s.z });
+  }
+  if (chain.length < 2) return;
+  for (let i = 0; i < chain.length - 1; i++) {
+    const a = chain[i], b = chain[i + 1];
+    const avgZ = (a.z + b.z) / 2;
+    addDraw(avgZ, (ctx) => {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+    });
+  }
+};
+
 /* ==================== 2. 立方体面 ==================== */
 PP.Renderer.drawCubeFaces = function (cube, addDraw) {
   const verts = PP.cubeVertices(cube);
+  const fisheye = PP.App.eyeView && (PP.App.canvas.shape || 'flat') !== 'flat';
+  if (fisheye) {
+    // 鱼眼下表面轮廓也变形：采样 4 条边围成闭合路径再填充
+    for (const face of PP.CUBE_FACES) {
+      const world = [];
+      const per = 6;
+      for (let e = 0; e < 4; e++) {
+        const a = verts[face[e]], b = verts[face[(e + 1) % 4]];
+        for (let k = 0; k < per; k++) world.push(M3.lerp(a, b, k / per));
+      }
+      const pts = this._projectPath(world);
+      if (!pts) continue;
+      const avgZ = pts.reduce((s, p) => s + p.z, 0) / pts.length;
+      addDraw(avgZ, (ctx) => {
+        ctx.beginPath();
+        ctx.moveTo(pts[0].x, pts[0].y);
+        for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+        ctx.closePath();
+        ctx.fillStyle = cube.color + '33'; // 20% 不透明度
+        ctx.fill();
+        ctx.strokeStyle = cube.color + '55';
+        ctx.lineWidth = 0.5;
+        ctx.stroke();
+      });
+    }
+    return;
+  }
   const sc = verts.map((v) => this._sc(v));
   if (sc.some((s) => !s)) return;
   for (const face of PP.CUBE_FACES) {
@@ -305,24 +507,46 @@ PP.Renderer.drawCubeFaces = function (cube, addDraw) {
   }
 };
 
+// 世界坐标点链 → 屏幕点链；任一点不可见（相机后方）返回 null
+PP.Renderer._projectPath = function (worldPts) {
+  const out = [];
+  for (const p of worldPts) {
+    const s = this._sc(p);
+    if (!s) return null;
+    out.push(s);
+  }
+  return out;
+};
+
 /* ==================== 3. 立方体线框 ==================== */
 PP.Renderer.drawCubeWireframe = function (cube, addDraw) {
   const verts = PP.cubeVertices(cube);
-  const sc = verts.map((v) => this._sc(v));
-  if (sc.some((s) => !s)) return;
+  const fisheye = PP.App.eyeView && (PP.App.canvas.shape || 'flat') !== 'flat';
   const isSelected = PP.App.selectedId === cube.id;
   for (const edge of PP.CUBE_EDGES) {
-    const p0 = sc[edge[0]], p1 = sc[edge[1]];
-    if (!p0 || !p1) continue;
-    const avgZ = (p0.z + p1.z) / 2;
-    addDraw(avgZ, (ctx) => {
-      ctx.beginPath();
-      ctx.moveTo(p0.x, p0.y);
-      ctx.lineTo(p1.x, p1.y);
-      ctx.strokeStyle = isSelected ? '#fff' : cube.color;
-      ctx.lineWidth = isSelected ? 2.5 : 1.5;
-      ctx.stroke();
-    });
+    if (fisheye) {
+      // 鱼眼下直线投影为曲线：采样 3D 棱 → 逐段裁剪绘制，与画布上的黄色透视图形对齐
+      const vA = verts[edge[0]], vB = verts[edge[1]];
+      const pts = [];
+      const SEG = 12;
+      for (let k = 0; k <= SEG; k++) pts.push(M3.lerp(vA, vB, k / SEG));
+      this._drawChain(addDraw, pts, (ctx) => {
+        ctx.strokeStyle = isSelected ? '#fff' : cube.color;
+        ctx.lineWidth = isSelected ? 2.5 : 1.5;
+      });
+    } else {
+      const p0 = this._sc(verts[edge[0]]), p1 = this._sc(verts[edge[1]]);
+      if (!p0 || !p1) continue;
+      const avgZ = (p0.z + p1.z) / 2;
+      addDraw(avgZ, (ctx) => {
+        ctx.beginPath();
+        ctx.moveTo(p0.x, p0.y);
+        ctx.lineTo(p1.x, p1.y);
+        ctx.strokeStyle = isSelected ? '#fff' : cube.color;
+        ctx.lineWidth = isSelected ? 2.5 : 1.5;
+        ctx.stroke();
+      });
+    }
   }
   if (isSelected) {
     // 选中高亮光环
@@ -346,7 +570,7 @@ PP.Renderer.drawProjectionLines = function (cube, addDraw) {
   const plane = app.canvas;
 
   for (const v of verts) {
-    const res = M3.projectToCanvas(v, eyePos, plane.center, plane.normal);
+    const res = M3.projectToCanvas(v, eyePos, plane);
     if (!res || res.t < 0) continue;
     // 交点
     const pSc = this._sc(res.point);
@@ -372,11 +596,9 @@ PP.Renderer.drawProjectionLines = function (cube, addDraw) {
       ctx.stroke();
 
       // 画布交点小圆点
-      const loc = M3.pointOnCanvas(res.point, plane, M3.canvasBasis(plane));
-      const r = loc.on ? 4 : 2.5;
       ctx.beginPath();
-      ctx.arc(pSc.x, pSc.y, r, 0, Math.PI * 2);
-      ctx.fillStyle = loc.on ? '#16a085' : 'rgba(22,160,133,0.45)';
+      ctx.arc(pSc.x, pSc.y, 4, 0, Math.PI * 2);
+      ctx.fillStyle = '#16a085';
       ctx.fill();
     });
   }
@@ -389,30 +611,26 @@ PP.Renderer.drawPerspectiveShape = function (cube, addDraw) {
   const eyePos = app.eye.pos;
   const plane = app.canvas;
 
-  // 投影到画布的 8 个点
-  const proj = verts.map((v) => {
-    const res = M3.projectToCanvas(v, eyePos, plane.center, plane.normal);
-    return res && res.t >= 0 ? res.point : null;
-  });
-  if (proj.some((p) => p === null)) return;
-
-  // 按 12 条棱连接
+  // 每条棱采样实际 3D 线段 → 投影到画布表面 → 连成（可能是曲线的）透视图形
   for (const edge of PP.CUBE_EDGES) {
-    const p0 = this._sc(proj[edge[0]]);
-    const p1 = this._sc(proj[edge[1]]);
-    if (!p0 || !p1) continue;
-    const avgZ = (p0.z + p1.z) / 2;
-    addDraw(avgZ, (ctx) => {
-      // 深色描边 + 亮色内芯，保证在深色背景上醒目
-      ctx.beginPath();
-      ctx.moveTo(p0.x, p0.y);
-      ctx.lineTo(p1.x, p1.y);
+    const vA = verts[edge[0]], vB = verts[edge[1]];
+    const SURF = [];
+    const SEG = 24;
+    let ok = true;
+    for (let k = 0; k <= SEG; k++) {
+      const s = M3.lerp(vA, vB, k / SEG); // 3D 边上的采样点
+      const pr = M3.projectToCanvas(s, eyePos, plane);
+      if (!pr || pr.t < 0) { ok = false; break; }
+      SURF.push(pr.point);
+    }
+    if (!ok) continue;
+    this._drawChain(addDraw, SURF, (ctx) => {
       ctx.strokeStyle = 'rgba(10, 15, 25, 0.95)';
       ctx.lineWidth = 5;
-      ctx.stroke();
+    });
+    this._drawChain(addDraw, SURF, (ctx) => {
       ctx.strokeStyle = '#f1c40f';
       ctx.lineWidth = 2.5;
-      ctx.stroke();
     });
   }
 };
@@ -446,29 +664,30 @@ PP.Renderer.drawSightLine = function (addDraw) {
 
 /* ==================== 7. 视锥 ==================== */
 PP.Renderer.drawFrustum = function (addDraw) {
-  const eye = PP.App.eye;
-  const plane = PP.App.canvas;
-  const angle = PP.App.options.frustumAngle * (Math.PI / 180);
+  const app = PP.App;
+  const eye = app.eye;
+  const plane = app.canvas;
+  const angle = app.options.frustumAngle * (Math.PI / 180);
   const eSc = this._sc(eye.pos);
   if (!eSc) return;
 
-  // 轴向射线与画布交点 = 锥底圆心
-  const res = M3.rayPlane(eye.pos, eye.dir, plane.center, plane.normal);
-  if (!res) return;
-  const distToCanvas = M3.dist(eye.pos, res.point);
-  const radius = Math.tan(angle) * distToCanvas;
-
-  // 画出锥底圆周上的点
+  // 锥母线方向在画布表面上的落点 → 环绕成锥底曲线（扁平面/球/圆柱各不相同）
   const basis = M3.canvasBasis(plane);
-  const nSamples = 32;
-  const pts = [];
+  const nSamples = 48;
+  const raw = [];
   for (let i = 0; i < nSamples; i++) {
-    const theta = (i / nSamples) * Math.PI * 2;
-    const offset = M3.add(M3.scale(basis.u, Math.cos(theta) * radius), M3.scale(basis.v, Math.sin(theta) * radius));
-    const wp = M3.add(res.point, offset);
-    const sp = this._sc(wp);
-    if (sp) pts.push(sp);
+    const th = (i / nSamples) * Math.PI * 2;
+    const d = M3.norm(M3.add(
+      M3.scale(basis.n, Math.cos(angle)),
+      M3.add(M3.scale(basis.u, Math.sin(angle) * Math.cos(th)), M3.scale(basis.v, Math.sin(angle) * Math.sin(th)))
+    ));
+    const far = M3.add(eye.pos, M3.scale(d, 1000));
+    const hit = M3.projectToCanvas(far, eye.pos, plane);
+    if (!hit || hit.t < 0) { raw.push(null); continue; }
+    const s = this._sc(hit.point);
+    raw.push(s);
   }
+  const pts = raw.filter((s) => s !== null);
   if (pts.length < 3) return;
   const avgZ = (eSc.z + pts.reduce((a, p) => a + p.z, 0) / pts.length) / 2;
 
@@ -476,7 +695,7 @@ PP.Renderer.drawFrustum = function (addDraw) {
     ctx.setLineDash([3, 5]);
     ctx.strokeStyle = 'rgba(231, 76, 60, 0.5)';
     ctx.lineWidth = 1;
-    // 锥底圆
+    // 锥底（曲面）曲线
     ctx.beginPath();
     ctx.moveTo(pts[0].x, pts[0].y);
     for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
@@ -502,40 +721,255 @@ PP.CUBE_EDGE_GROUPS = [
 ];
 
 PP.Renderer.drawParallelLines = function (cube, addDraw) {
-  const verts = PP.cubeVertices(cube);
   const axes = PP.cubeAxes(cube);
   const colors = ['#e67e22', '#27ae60', '#8e44ad'];
-  // "无限延伸"：生长到越过视锥/覆盖画面，达到"朝向灭点延伸"的观感
-  const ext = M3.dist(PP.App.camera.pos, cube.position) * 3 + 20;
-
+  const verts = PP.cubeVertices(cube);
+  // 鱼眼（球/圆柱）投影下直线不再是直线，只能采样绘制（屏幕坐标有界，无超长路径问题）
+  const fisheye = PP.App.eyeView && (PP.App.canvas.shape || 'flat') !== 'flat';
   for (let g = 0; g < 3; g++) {
-    const dir = M3.norm(axes[g]);
-    const edgePairs = PP.CUBE_EDGE_GROUPS[g];
-
-    for (const [i0, i1] of edgePairs) {
-      const p0 = verts[i0], p1 = verts[i1];
-      // 每条棱沿 dir 向两侧延伸出两条"射线"；对近平面做裁剪，
-      // 保证朝向相机的线也能正确延伸到画面边缘（不因端点越界而整条消失）
-      this._drawExtLine(addDraw, p0, p0, dir, ext, colors[g]);
-      this._drawExtLine(addDraw, p1, p1, dir, ext, colors[g]);
+    if (fisheye) {
+      for (const pair of PP.CUBE_EDGE_GROUPS[g]) {
+        this._drawInfiniteLineSampled(addDraw, verts[pair[0]], axes[g], colors[g]);
+      }
+    } else {
+      this._drawParallelGroupFlat(addDraw, verts, PP.CUBE_EDGE_GROUPS[g], axes[g], colors[g]);
     }
   }
 };
 
-// 沿 dir 过 origin 的"无限"延伸线：两端点投影并近平面裁剪后画线
-PP.Renderer._drawExtLine = function (addDraw, oA, oB, dir, ext, color) {
-  const wA = M3.sub(oA, M3.scale(dir, ext));
-  const wB = M3.add(oB, M3.scale(dir, ext));
-  const res = this._clipSegmentWorld(wA, wB);
-  if (!res) return;
-  const avgZ = (res.a.z + res.b.z) / 2;
-  addDraw(avgZ, (ctx) => {
+// 灭点：方向 dir 在屏幕上的投影。正反两个无穷远点投影到同一灭点，
+// 因此直接投影方向即可（对任意朝向都成立）。
+// 不要采样 cam.pos + dir*1e7 这样的"远点"——当轴向指向相机时该点落在相机后方，
+// worldToScreen 返回 null，会导致灭点丢失、整组平行线被跳过。
+PP.Renderer._vpScreen = function (dir) {
+  const cam = PP.App.camera;
+  const dc = M3.toCamSpace(M3.add(cam.pos, dir), cam.pos, this.basis);
+  const fisheye = PP.App.eyeView && (PP.App.canvas.shape || 'flat') !== 'flat';
+  if (fisheye) {
+    // 鱼眼（球/圆柱）下取指向屏幕前方（z>0）的方向投影为可见灭点：
+    // 该方向的无穷远点沿视线前方可见，另一侧（后方）不可见
+    const d2 = dc.z > 0 ? dc : M3.scale(dc, -1);
+    const sp = this._fisheyeScreen(d2);
+    if (!sp) return null;
+    return { x: sp.x, y: sp.y, z: 0 };
+  }
+  if (Math.abs(dc.z) < 1e-9) return null; // 方向平行于近平面 → 灭点在无穷远
+  const p = M3.projectCam(dc, this.fov, this.W / this.H);
+  return { x: (p.sx + 1) * 0.5 * this.W, y: (-p.sy + 1) * 0.5 * this.H, z: 0 };
+};
+
+// 平面透视优化：直线投影仍是直线。
+// 旧实现每线采样 50+ 点并逐段近平面裁剪，远点投影后屏幕坐标达百万像素级，
+// 产生超长路径，Canvas 描边/虚线计算逐帧遍历 → 卡顿。
+// 新实现：每组只算一次共享灭点（4 条平行线真正在无穷远交于同一点），
+// 每条线只需一次近平面裁剪得到"可见半射线"，再裁剪到视口后绘制。
+PP.Renderer._drawParallelGroupFlat = function (addDraw, verts, edgePairs, dir, color) {
+  const W = this.W, H = this.H;
+  const cam = PP.App.camera;
+  const basis = this.basis;
+  const fwd = basis.forward;
+  const near = 0.1;
+
+  // 共享灭点（与 drawVanishingPoints 完全一致）
+  const vpSc = this._vpScreen(dir);
+
+  // 屏幕方向：灭点不可见（dir 平行于近平面）时退化为 dir 的正交投影方向
+  const dirC = M3.toCamSpace(M3.add(cam.pos, dir), cam.pos, basis);
+  const dl = Math.hypot(dirC.x, dirC.y);
+  const dScreen = dl > 1e-9 ? { x: dirC.x / dl, y: dirC.y / dl } : null;
+
+  const zdir = dirC.z;
+
+  for (const pair of edgePairs) {
+    const A = verts[pair[0]];
+    const zA = M3.dot(M3.sub(A, cam.pos), fwd);
+
+    // 整条直线在相机后方 → 不可见
+    if (zA < near && zdir <= 1e-9) continue;
+
+    let P, mode;
+    if (Math.abs(zdir) < 1e-9) {
+      // 直线平行于近平面（整条可见）→ 画穿过锚点的整条屏幕线
+      const aSc = this._sc(A);
+      if (!aSc) continue;
+      P = aSc; mode = 'line';
+    } else {
+      // 近平面裁剪：可见部分 = 近平面交点 C → 灭点的半射线（过锚点 A）
+      const t0 = (near + 0.05 - zA) / zdir;
+      const cSc = this._sc(M3.add(A, M3.scale(dir, t0)));
+      if (!cSc) continue;
+      P = cSc; mode = 'ray';
+    }
+
+    // 从 P 指向灭点的屏幕方向（ray 模式下灭点必存在；line 模式用正交投影方向）
+    let d;
+    if (mode === 'ray' && vpSc) {
+      const vx = vpSc.x - P.x, vy = vpSc.y - P.y;
+      const vl = Math.hypot(vx, vy);
+      if (vl < 1e-6) continue;
+      d = { x: vx / vl, y: vy / vl };
+    } else {
+      if (!dScreen) continue;
+      d = dScreen;
+    }
+
+    const res = mode === 'ray'
+      ? this._rayToVP(P, d, vpSc, W, H)
+      : this._clipLineRect(P, d, W, H);
+    if (!res) continue;
+
+    addDraw(P.z, (ctx) => {
+      ctx.setLineDash([6, 5]);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(res.a.x, res.a.y);
+      ctx.lineTo(res.b.x, res.b.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    });
+  }
+};
+
+// 从 P 沿 d 的半射线 → 裁剪到视口；灭点在视口内则恰好终止于灭点
+PP.Renderer._rayToVP = function (P, d, vp, W, H) {
+  const r = this._rayRect(P, d, W, H);
+  if (!r) return null;
+  let t0 = Math.max(0, r.tEnter);
+  let t1 = r.tExit;
+  if (vp && vp.x >= -0.5 && vp.x <= W + 0.5 && vp.y >= -0.5 && vp.y <= H + 0.5) {
+    const tvp = (vp.x - P.x) * d.x + (vp.y - P.y) * d.y;
+    if (tvp >= t0) t1 = Math.min(t1, tvp);
+  }
+  if (t1 - t0 < 1e-6) return null;
+  return {
+    a: { x: P.x + d.x * t0, y: P.y + d.y * t0 },
+    b: { x: P.x + d.x * t1, y: P.y + d.y * t1 },
+  };
+};
+
+// 过 P、方向 d 的整条屏幕线 → 裁剪到视口（直线平行于近平面、整条可见时用）
+PP.Renderer._clipLineRect = function (P, d, W, H) {
+  const BIG = 1e5;
+  const a = { x: P.x - d.x * BIG, y: P.y - d.y * BIG };
+  const b = { x: P.x + d.x * BIG, y: P.y + d.y * BIG };
+  return this._clipSeg2D(a, b, W, H);
+};
+
+// 射线与矩形 [0,W]×[0,H] 求交（slab 法），返回 tEnter/tExit
+PP.Renderer._rayRect = function (P, d, W, H) {
+  let t0 = 0, t1 = Infinity;
+  const slabs = [
+    { lo: 0, hi: W, c: 'x' },
+    { lo: 0, hi: H, c: 'y' },
+  ];
+  for (const s of slabs) {
+    const pc = P[s.c], dc = d[s.c];
+    if (Math.abs(dc) < 1e-9) {
+      if (pc < s.lo || pc > s.hi) return null;
+    } else {
+      let ta = (s.lo - pc) / dc;
+      let tb = (s.hi - pc) / dc;
+      if (ta > tb) { const tmp = ta; ta = tb; tb = tmp; }
+      t0 = Math.max(t0, ta);
+      t1 = Math.min(t1, tb);
+      if (t0 > t1) return null;
+    }
+  }
+  return { tEnter: t0, tExit: t1 };
+};
+
+// Liang-Barsky 线段裁剪到视口
+PP.Renderer._clipSeg2D = function (a, b, W, H) {
+  let t0 = 0, t1 = 1;
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const p = [-dx, dx, -dy, dy];
+  const q = [a.x, W - a.x, a.y, H - a.y];
+  for (let i = 0; i < 4; i++) {
+    if (Math.abs(p[i]) < 1e-12) {
+      if (q[i] < 0) return null;
+    } else {
+      const r = q[i] / p[i];
+      if (p[i] < 0) {
+        if (r > t1) return null;
+        if (r > t0) t0 = r;
+      } else {
+        if (r < t0) return null;
+        if (r < t1) t1 = r;
+      }
+    }
+  }
+  if (t1 - t0 < 1e-6) return null;
+  return {
+    a: { x: a.x + t0 * dx, y: a.y + t0 * dy },
+    b: { x: a.x + t1 * dx, y: a.y + t1 * dy },
+  };
+};
+
+// 鱼眼（球/圆柱）备用路径：过 anchor、方向为 dir 的"无限"直线 → 采样曲线链 + 逐段近平面裁剪。
+// 仅在非平面画布 + 人眼视图下使用。
+// 旧实现把 +dir / -dir 两侧的点交错塞进同一条链（anchor±d0, anchor±d0·p, …），
+// 屏幕上的曲线在两个分支之间来回反弹，形成"乱麻"且路径超长导致卡顿。
+// 新实现：正负两个分支各自独立成链，采样距离按几何级数从近到远
+// （近处密集保证曲线平滑，远处指数扩张使线条在屏幕上收敛到灭点），
+// 每条分支投影后都是平滑单调的曲线。
+PP.Renderer._drawInfiniteLineSampled = function (addDraw, anchor, dir, color) {
+  this._drawLineRay(addDraw, anchor, dir, color);
+  this._drawLineRay(addDraw, anchor, M3.scale(dir, -1), color);
+};
+
+// 从 anchor 出发、沿 +dir 方向延伸的一条分支：采样点距离按几何级数扩展
+PP.Renderer._drawLineRay = function (addDraw, anchor, dir, color) {
+  const N = 20, t0 = 1.5, tmax = 1e5;
+  const p = Math.pow(tmax / t0, 1 / (N - 1));
+  const pts = [anchor];
+  let t = t0;
+  for (let k = 1; k < N; k++) {
+    pts.push(M3.add(anchor, M3.scale(dir, t)));
+    t *= p;
+  }
+  this._drawChain(addDraw, pts, (ctx) => {
     ctx.setLineDash([6, 5]);
     ctx.strokeStyle = color;
     ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.moveTo(res.a.x, res.a.y); ctx.lineTo(res.b.x, res.b.y); ctx.stroke();
-    ctx.setLineDash([]);
   });
+};
+
+// 对一条世界坐标点链逐段做近平面裁剪，并把相邻可见段合并为少数几条折线后绘制。
+// 相比逐段独立描边，大幅减少 Canvas 调用次数，解决平行线渲染卡顿。
+PP.Renderer._drawChain = function (addDraw, worldPts, styleFn) {
+  let run = null;        // 当前连续可见折线的屏幕点
+  let runZ = Infinity;   // 折线中最近的深度（用于画家排序，保证平行线在画布前可见）
+  const flush = () => {
+    if (run && run.length >= 2) {
+      const pts = run, d = runZ;
+      addDraw(d, (ctx) => {
+        styleFn(ctx);
+        ctx.beginPath();
+        ctx.moveTo(pts[0].x, pts[0].y);
+        for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      });
+    }
+    run = null; runZ = Infinity;
+  };
+  const addPt = (p) => {
+    run.push(p);
+    if (p.z < runZ) runZ = p.z;
+  };
+  for (let i = 0; i < worldPts.length - 1; i++) {
+    const res = this._clipSegmentWorld(worldPts[i], worldPts[i + 1]);
+    if (!res) { flush(); continue; }
+    if (run) {
+      // 上一段末点即本段起点，仅追加本段末点
+      addPt(res.b);
+    } else {
+      run = [];
+      addPt(res.a); addPt(res.b);
+    }
+  }
+  flush();
 };
 
 // 世界坐标线段 → 两个屏幕点；任一端在相机后方时按近平面插值裁剪，返回 null 表示整段不可见
@@ -565,21 +999,13 @@ PP.Renderer.drawVanishingPoints = function (cube, addDraw) {
   const app = PP.App;
   const axes = PP.cubeAxes(cube);
   const colors = ['#e67e22', '#27ae60', '#8e44ad'];
-  const plane = app.canvas;
   const eye = app.eye;
-  const basis = M3.canvasBasis(plane);
   const eSc = this._sc(eye.pos); // 人眼视图下眼睛==相机，可能为 null（仅影响辅助线）
 
+  // 灭点 = 该方向直线在无穷远处的投影（与平行线的收敛点完全一致）
   for (let g = 0; g < 3; g++) {
     const dir = axes[g];
-    const denom = M3.dot(plane.normal, dir);
-    if (Math.abs(denom) < M3.EPS) {
-      app.warnings.push('组' + (g + 1) + '方向平行于画面，灭点在无穷远');
-      continue;
-    }
-    const s = M3.dot(plane.normal, M3.sub(plane.center, eye.pos)) / denom;
-    const vp = M3.add(eye.pos, M3.scale(dir, s));
-    const vpSc = this._sc(vp);
+    const vpSc = this._vpScreen(dir);
     if (!vpSc) continue;
 
     addDraw(vpSc.z, (ctx) => {
@@ -695,17 +1121,12 @@ PP.Renderer.drawCanvasLabel = function (addDraw) {
 };
 
 PP.Renderer.drawVPLabels = function (cube, addDraw) {
-  const app = PP.App;
   const axes = PP.cubeAxes(cube);
   const colors = ['#e67e22', '#27ae60', '#8e44ad'];
   const dirs = ['X', 'Y', 'Z'];
   for (let g = 0; g < 3; g++) {
     const dir = axes[g];
-    const denom = M3.dot(app.canvas.normal, dir);
-    if (Math.abs(denom) < M3.EPS) continue;
-    const s = M3.dot(app.canvas.normal, M3.sub(app.canvas.center, app.eye.pos)) / denom;
-    const vp = M3.add(app.eye.pos, M3.scale(dir, s));
-    const vpSc = this._sc(vp);
+    const vpSc = this._vpScreen(dir);
     if (!vpSc) continue;
     addDraw(vpSc.z, (ctx) => {
       this._drawLabel(ctx, '灭点 ' + dirs[g], vpSc.x, vpSc.y - 18, colors[g]);

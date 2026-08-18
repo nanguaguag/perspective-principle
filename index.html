@@ -34,6 +34,7 @@
     <div class="appbar-actions">
       <button id="btn-add" class="m3-btn m3-btn-filled">＋ 添加立方体</button>
       <button id="btn-reset" class="m3-btn m3-btn-tonal">重置</button>
+      <button id="btn-toggle-panel" class="m3-btn m3-btn-tonal active" title="隐藏侧边栏">☰ 面板</button>
     </div>
   </header>
 
@@ -84,6 +85,14 @@
 
       <section class="m3-card">
         <h3 class="m3-card-title">画布</h3>
+        <div class="m3-slider-row" style="justify-content:space-between;margin-bottom:6px">
+          <span class="slider-label">画布形状</span>
+        </div>
+        <div class="segmented seg-sm" id="canvasShape" role="group" aria-label="画布形状">
+          <button class="segmented-btn shape-btn active" data-shape="flat" title="平面画布：经典透视">平面</button>
+          <button class="segmented-btn shape-btn" data-shape="sphere" title="球形画布：等距鱼眼（球心=人眼）">球形</button>
+          <button class="segmented-btn shape-btn" data-shape="cylinder" title="圆柱画布：柱面展开（轴过人眼）">圆柱</button>
+        </div>
         <label class="m3-switch"><input type="checkbox" id="opt-lockCanvas" checked><span class="track"><span class="thumb"></span></span><span class="label">锁定画布垂直于视线</span></label>
         <div class="m3-slider-row">
           <span class="slider-label">画布大小</span>
@@ -101,11 +110,11 @@
   </footer>
 </div>
 
-<script src="js/math.js?v=8"></script>
-<script src="js/scene.js?v=8"></script>
-<script src="js/renderer.js?v=8"></script>
-<script src="js/interaction.js?v=8"></script>
-<script src="js/ui.js?v=8"></script>
-<script src="js/main.js?v=8"></script>
+<script src="js/math.js?v=10"></script>
+<script src="js/scene.js?v=10"></script>
+<script src="js/renderer.js?v=13"></script>
+<script src="js/interaction.js?v=12"></script>
+<script src="js/ui.js?v=12"></script>
+<script src="js/main.js?v=10"></script>
 </body>
 </html>

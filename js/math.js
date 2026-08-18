@@ -140,15 +140,34 @@ const M3 = (function () {
     return tmax >= 0 ? Math.max(tmin, 0) : null;
   }
 
-  /* ---------------- 透视投影：点 → 画布 ---------------- */
-  // 人眼 E 看向点 P，连线与画布平面 (C,N) 相交
-  // 返回 { t, point }；若连线平行于画布返回 null
-  function projectToCanvas(P, E, planeCenter, planeNormal) {
+  /* ---------------- 透视投影：点 → 画布（曲面） ---------------- */
+  // 人眼 E 看向点 P，连线与画布表面 (C,N) 相交
+  // canvas.shape: 'flat' 平面 | 'sphere' 球(球心=E) | 'cylinder' 圆柱(轴=世界Y,过E)
+  // 返回 { t, point }；若连线无效返回 null
+  function canvasRadius(E, canvas) {
+    return Math.max(0.35, dist(E, canvas.center) * (canvas.size === undefined ? 1 : canvas.size));
+  }
+  function projectToCanvas(P, E, canvas) {
+    const shape = canvas.shape || 'flat';
     const dir = sub(P, E);
-    const denom = dot(planeNormal, dir);
-    if (Math.abs(denom) < EPS) return null;
-    const t = dot(planeNormal, sub(planeCenter, E)) / denom;
-    return { t, point: add(E, scale(dir, t)) };
+    if (shape === 'flat') {
+      const denom = dot(canvas.normal, dir);
+      if (Math.abs(denom) < EPS) return null;
+      const t = dot(canvas.normal, sub(canvas.center, E)) / denom;
+      return { t, point: add(E, scale(dir, t)) };
+    }
+    const R = canvasRadius(E, canvas);
+    const d = norm(dir);
+    if (shape === 'sphere') {
+      // 球心在人眼：射线经 t=R 处与球面相交
+      return { t: R, point: add(E, scale(d, R)) };
+    }
+    // 圆柱（轴=画布竖直方向 v，过人眼；锁定画布时 v ⊥ 视线）
+    const cb = canvasBasis(canvas);
+    const lh = Math.hypot(dot(d, cb.u), dot(d, cb.n));
+    if (lh < EPS) return null; // 沿柱轴方向，无法确定唯一柱面落点
+    const t = R / lh;
+    return { t, point: add(E, scale(d, t)) };
   }
 
   /* ---------------- 画布局部坐标 ---------------- */

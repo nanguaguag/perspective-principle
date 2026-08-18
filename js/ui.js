@@ -10,6 +10,8 @@ PP.UI.bind = function () {
   this.elems.btnAdd = document.getElementById('btn-add');
   this.elems.btnReset = document.getElementById('btn-reset');
   this.elems.btnEyeView = document.getElementById('btn-eyeview');
+  this.elems.btnTogglePanel = document.getElementById('btn-toggle-panel');
+  this.elems.panel = document.getElementById('panel');
 
   this.elems.optShowSightLine = document.getElementById('opt-showSightLine');
   this.elems.optShowFrustum = document.getElementById('opt-showFrustum');
@@ -25,6 +27,7 @@ PP.UI.bind = function () {
   this.elems.optLockCanvas = document.getElementById('opt-lockCanvas');
   this.elems.canvasSize = document.getElementById('canvasSize');
   this.elems.canvasSizeVal = document.getElementById('canvasSizeVal');
+  this.elems.canvasShapeBtns = document.querySelectorAll('#canvasShape .shape-btn');
 
   this.elems.selPanel = document.getElementById('sel-panel');
   this.elems.selName = document.getElementById('sel-name');
@@ -44,6 +47,7 @@ PP.UI.bind = function () {
   this.elems.btnReset.addEventListener('click', () => this.reset());
   this.elems.btnDelete.addEventListener('click', () => this.deleteSelected());
   this.elems.btnEyeView.addEventListener('click', () => this.toggleEyeView());
+  this.elems.btnTogglePanel.addEventListener('click', () => this.togglePanel());
 
   this.elems.optShowSightLine.addEventListener('change', () => this.syncOptions());
   this.elems.optShowFrustum.addEventListener('change', () => this.syncOptions());
@@ -65,10 +69,37 @@ PP.UI.bind = function () {
     this.elems.canvasSizeVal.textContent = Math.round(PP.App.canvas.size * 100) + '%';
   });
 
+  for (const btn of this.elems.canvasShapeBtns) {
+    btn.addEventListener('click', () => this.setCanvasShape(btn.dataset.shape));
+  }
+
   this.selectTool(PP.App.tool);
   this.syncOptionsToUI();
+  this.syncCanvasShape();
   this.updateSelectionPanel();
   this.updateStatus();
+};
+
+// 切换画布形状（平面 / 球形 / 圆柱）
+PP.UI.setCanvasShape = function (shape) {
+  PP.App.canvas.shape = shape;
+  this.syncCanvasShape();
+};
+
+PP.UI.syncCanvasShape = function () {
+  const shape = PP.App.canvas.shape || 'flat';
+  for (const btn of this.elems.canvasShapeBtns) {
+    btn.classList.toggle('active', btn.dataset.shape === shape);
+  }
+};
+
+// 显示 / 隐藏右侧面板；隐藏后画布占满舞台，需重新适配尺寸
+PP.UI.togglePanel = function () {
+  const hidden = !this.elems.panel.hidden;
+  this.elems.panel.hidden = hidden;
+  this.elems.btnTogglePanel.classList.toggle('active', !hidden);
+  this.elems.btnTogglePanel.title = hidden ? '显示侧边栏' : '隐藏侧边栏';
+  PP.Renderer.resize(document.getElementById('scene'));
 };
 
 PP.UI.selectTool = function (tool) {
@@ -213,6 +244,7 @@ PP.UI.reset = function () {
   PP.resetScene();
   this.selectTool(PP.App.tool);
   this.syncOptionsToUI();
+  this.syncCanvasShape();
   this.updateSelectionPanel();
   this.updateStatus();
   this.syncEyeViewButton();
@@ -220,7 +252,7 @@ PP.UI.reset = function () {
 
 PP.UI.updateStatus = function () {
   const toolHint = {
-    select: '选择/查看：点击物体选中或再点取消，点击空白取消选中；拖动旋转视图，Shift+拖动平移，Ctrl/⌘+滚轮缩放',
+    select: '选择/查看：点击物体选中或再点取消，点击空白取消选中；拖动旋转视图，Shift+拖动平移，Ctrl/⌘+滚轮缩放；触控板：双指滚动旋转，Shift+双指滚动平移，捏合缩放',
     move: '移动：拖拽人眼/立方体/画布；空白处拖动旋转视图，滚轮缩放',
     rotate: '旋转：按住对象改变方向（人眼=控制视线方向）；空白处拖动旋转视图',
     scale: '缩放：按住立方体水平拖动改变大小；空白处拖动旋转视图',
