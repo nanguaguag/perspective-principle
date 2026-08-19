@@ -53,7 +53,7 @@
     <aside id="panel">
       <section class="m3-card">
         <h3 class="m3-card-title">视图选项</h3>
-        <label class="m3-switch"><input type="checkbox" id="opt-showSightLine" checked><span class="track"><span class="thumb"></span></span><span class="label">视线（观察方向）</span></label>
+        <label class="m3-switch"><input type="checkbox" id="opt-showSightLine" checked><span class="track"><span class="thumb"></span></span><span class="label">视线</span></label>
         <label class="m3-switch"><input type="checkbox" id="opt-showFrustum" checked><span class="track"><span class="thumb"></span></span><span class="label">视锥</span></label>
         <div class="m3-slider-row">
           <span class="slider-label">视锥角度</span>
@@ -61,9 +61,14 @@
           <span id="frustumVal" class="slider-val">45°</span>
         </div>
         <div class="m3-slider-row">
-          <span class="slider-label">滚动缩放灵敏度</span>
+          <span class="slider-label">滚动灵敏度</span>
           <input type="range" id="zoomSens" min="5" max="200" step="5" value="50" aria-label="滚动缩放灵敏度">
           <span id="zoomSensVal" class="slider-val">50%</span>
+        </div>
+        <div class="m3-slider-row">
+          <span class="slider-label">曲线光滑度</span>
+          <input type="range" id="curveSmooth" min="4" max="128" step="1" value="64" aria-label="曲线光滑度" title="鱼眼透视下曲线细分段数，越高越平滑">
+          <span id="curveSmoothVal" class="slider-val">64</span>
         </div>
         <label class="m3-switch"><input type="checkbox" id="opt-showProjectionLines" checked><span class="track"><span class="thumb"></span></span><span class="label">投影连线（点 ↔ 人眼 ↔ 画布）</span></label>
         <label class="m3-switch"><input type="checkbox" id="opt-showPerspective" checked><span class="track"><span class="thumb"></span></span><span class="label">画布上的平行透视图形</span></label>
@@ -73,7 +78,7 @@
       <section class="m3-card" id="sel-panel" hidden>
         <h3 class="m3-card-title" id="sel-name">立方体</h3>
         <div id="sel-size" class="sel-info"></div>
-        <label class="m3-switch"><input type="checkbox" id="opt-showParallelLines" checked><span class="track"><span class="thumb"></span></span><span class="label">显示平行线（3 组 3 色虚线）</span></label>
+        <label class="m3-switch"><input type="checkbox" id="opt-showParallelLines" checked><span class="track"><span class="thumb"></span></span><span class="label">显示平行线</span></label>
         <label class="m3-switch"><input type="checkbox" id="opt-showVanishingPoints" checked><span class="track"><span class="thumb"></span></span><span class="label">显示灭点</span></label>
         <div class="legend">
           <span class="lg" style="--c:#e67e22">方向 1</span>
@@ -110,11 +115,11 @@
   </footer>
 </div>
 
-<script src="js/math.js?v=10"></script>
-<script src="js/scene.js?v=10"></script>
-<script src="js/renderer.js?v=13"></script>
-<script src="js/interaction.js?v=12"></script>
-<script src="js/ui.js?v=12"></script>
+<script src="js/math.js?v=11"></script>
+<script src="js/scene.js?v=11"></script>
+<script src="js/renderer.js?v=14"></script>
+<script src="js/interaction.js?v=14"></script>
+<script src="js/ui.js?v=13"></script>
 <script src="js/main.js?v=10"></script>
 </body>
 </html>

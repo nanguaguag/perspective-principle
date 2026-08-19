@@ -139,6 +139,14 @@ const M3 = (function () {
     }
     return tmax >= 0 ? Math.max(tmin, 0) : null;
   }
+  // 射线 vs OBB（中心 + 四元数朝向 + 半边长）：
+  // 把射线变换到立方体局部空间再走 AABB；刚体变换保距离，t 值可直接复用
+  function rayOBB(origin, dir, center, quat, half) {
+    const qInv = { x: -quat.x, y: -quat.y, z: -quat.z, w: quat.w }; // 单位四元数的逆 = 共轭
+    const o = qRotate(qInv, sub(origin, center));
+    const d = qRotate(qInv, dir);
+    return rayAABB(o, d, { x: -half, y: -half, z: -half }, { x: half, y: half, z: half });
+  }
 
   /* ---------------- 透视投影：点 → 画布（曲面） ---------------- */
   // 人眼 E 看向点 P，连线与画布表面 (C,N) 相交
@@ -197,7 +205,7 @@ const M3 = (function () {
     EPS, UP, v3, add, sub, scale, dot, cross, len, dist, norm, lerp, clamp,
     qIdentity, qAxisAngle, qMul, qRotate, qNorm,
     camSetup, cameraBasis, basisFrom, toCamSpace, projectCam, screenRay,
-    rayPlane, raySphere, rayAABB, projectToCanvas,
+    rayPlane, raySphere, rayAABB, rayOBB, projectToCanvas,
     canvasBasis, pointOnCanvas,
   };
 })();

@@ -19,6 +19,8 @@ PP.UI.bind = function () {
   this.elems.frustumVal = document.getElementById('frustumVal');
   this.elems.zoomSens = document.getElementById('zoomSens');
   this.elems.zoomSensVal = document.getElementById('zoomSensVal');
+  this.elems.curveSmooth = document.getElementById('curveSmooth');
+  this.elems.curveSmoothVal = document.getElementById('curveSmoothVal');
   this.elems.optShowProjectionLines = document.getElementById('opt-showProjectionLines');
   this.elems.optShowPerspective = document.getElementById('opt-showPerspective');
   this.elems.optShowLabels = document.getElementById('opt-showLabels');
@@ -56,6 +58,10 @@ PP.UI.bind = function () {
     PP.App.options.zoomSensitivity = Number(this.elems.zoomSens.value) / 100;
     this.elems.zoomSensVal.textContent = Math.round(this.elems.zoomSens.value) + '%';
   });
+  this.elems.curveSmooth.addEventListener('input', () => {
+    PP.App.options.curveSmoothness = Number(this.elems.curveSmooth.value);
+    this.elems.curveSmoothVal.textContent = this.elems.curveSmooth.value;
+  });
   this.elems.optShowProjectionLines.addEventListener('change', () => this.syncOptions());
   this.elems.optShowPerspective.addEventListener('change', () => this.syncOptions());
   this.elems.optShowLabels.addEventListener('change', () => this.syncOptions());
@@ -90,6 +96,11 @@ PP.UI.syncCanvasShape = function () {
   const shape = PP.App.canvas.shape || 'flat';
   for (const btn of this.elems.canvasShapeBtns) {
     btn.classList.toggle('active', btn.dataset.shape === shape);
+  }
+  // 曲线光滑度仅在鱼眼（球/圆柱）画布下有效
+  if (this.elems.curveSmooth) {
+    this.elems.curveSmooth.disabled = (shape === 'flat');
+    this.elems.curveSmoothVal.classList.toggle('dim', shape === 'flat');
   }
 };
 
@@ -131,6 +142,8 @@ PP.UI.syncOptionsToUI = function () {
   const zs = Math.round(o.zoomSensitivity * 100);
   this.elems.zoomSens.value = zs;
   this.elems.zoomSensVal.textContent = zs + '%';
+  this.elems.curveSmooth.value = o.curveSmoothness;
+  this.elems.curveSmoothVal.textContent = o.curveSmoothness;
   this.elems.optShowProjectionLines.checked = o.showProjectionLines;
   this.elems.optShowPerspective.checked = o.showPerspective;
   this.elems.optShowLabels.checked = o.showLabels;
@@ -252,10 +265,10 @@ PP.UI.reset = function () {
 
 PP.UI.updateStatus = function () {
   const toolHint = {
-    select: '选择/查看：点击物体选中或再点取消，点击空白取消选中；拖动旋转视图，Shift+拖动平移，Ctrl/⌘+滚轮缩放；触控板：双指滚动旋转，Shift+双指滚动平移，捏合缩放',
-    move: '移动：拖拽人眼/立方体/画布；空白处拖动旋转视图，滚轮缩放',
-    rotate: '旋转：按住对象改变方向（人眼=控制视线方向）；空白处拖动旋转视图',
-    scale: '缩放：按住立方体水平拖动改变大小；空白处拖动旋转视图',
+    select: '选择/查看：点击物体选中或再点取消，点击空白取消选中；拖动旋转视图，Shift+拖动平移；触控板：双指滚动旋转，Shift+双指滚动平移，捏合/滚轮缩放',
+    move: '移动：拖拽人眼/立方体/画布；空白处拖动旋转视图；触控板：双指滚动旋转，Shift+双指滚动平移，捏合/滚轮缩放',
+    rotate: '旋转：按住对象改变方向（人眼=控制视线方向）；空白处拖动旋转视图；触控板：双指滚动旋转，Shift+双指滚动平移，捏合/滚轮缩放',
+    scale: '缩放：按住立方体水平拖动改变大小；空白处拖动旋转视图；触控板：双指滚动旋转，Shift+双指滚动平移，捏合/滚轮缩放',
   };
   this.elems.status.textContent = toolHint[PP.App.tool];
   const w = PP.App.warnings;

@@ -20,8 +20,8 @@ PP.Interaction.pick = function (ray) {
   const hitEye = M3.raySphere(ray.origin, ray.dir, eye.pos, 0.6);
   if (hitEye !== null) consider(3, hitEye, 'eye', null);
   for (const cube of app.cubes) {
-    const b = PP.Interaction.cubeAABB(cube);
-    const t = M3.rayAABB(ray.origin, ray.dir, b.min, b.max);
+    // OBB 精确命中：旋转后的立方体也能点中“真实形状”，避免点到 AABB 空角
+    const t = M3.rayOBB(ray.origin, ray.dir, cube.position, cube.quat, cube.size / 2);
     if (t !== null) consider(2, t, 'cube', cube.id);
   }
   const planeHit = M3.rayPlane(ray.origin, ray.dir, app.canvas.center, app.canvas.normal);
@@ -31,18 +31,6 @@ PP.Interaction.pick = function (ray) {
     if (loc.on) consider(1, planeHit.t, 'canvas', null);
   }
   return best;
-};
-
-PP.Interaction.cubeAABB = function (cube) {
-  const min = { x: Infinity, y: Infinity, z: Infinity };
-  const max = { x: -Infinity, y: -Infinity, z: -Infinity };
-  for (const v of PP.cubeVertices(cube)) {
-    for (const a of ['x', 'y', 'z']) {
-      min[a] = Math.min(min[a], v[a]);
-      max[a] = Math.max(max[a], v[a]);
-    }
-  }
-  return { min, max };
 };
 
 // 沿平行于屏幕平面拖动目标点
@@ -80,21 +68,51 @@ PP.Interaction.onMouseDown = function (e) {
   const pick = this.pick(ray);
   const tool = PP.App.tool;
 
-  // 人眼视图下：仅允许旋转视线（及随视线垂直的画布），不允许对象级平移/缩放/环绕，
-  // 避免拖动画布时"乱动"；点击立方体仍可选/取消选中
+  // 人眼视图：select 工具点击选中/取消；move/rotate/scale 可操作立方体；
+  // 其余（画布/空白）拖动旋转视线
   if (PP.App.eyeView) {
     if (tool === 'select') {
       if (pick && pick.type === 'cube') {
         PP.App.selectedId = (PP.App.selectedId === pick.id) ? null : pick.id;
-      } else if (!pick) {
-        PP.App.selectedId = null;
+      } else {
+        PP.App.selectedId = null; // 点击画布/空白都取消选中
       }
       PP.UI.updateSelectionPanel();
-    } else if (pick && pick.type === 'cube') {
+      this.startBlankDrag(); // eyeView → type='eyedir'，旋转视线
+      e.preventDefault();
+      return;
+    }
+    // 移动/旋转/缩放：命中立方体 → 对象级操作
+    if (pick && pick.type === 'cube') {
       PP.App.selectedId = pick.id;
       PP.UI.updateSelectionPanel();
+      if (tool === 'move') {
+        this.dragging = { type: 'move', target: 'cube', id: pick.id };
+        e.preventDefault();
+        return;
+      }
+      if (tool === 'rotate') {
+        this.dragging = {
+          type: 'rotate', target: 'cube', id: pick.id,
+          startYaw: PP.App.eye.yaw, startPitch: PP.App.eye.pitch,
+        };
+        e.preventDefault();
+        return;
+      }
+      if (tool === 'scale') {
+        this.dragging = {
+          type: 'scale', target: 'cube', id: pick.id,
+          startSize: PP.findCube(pick.id).size,
+          startX: mx,
+        };
+        e.preventDefault();
+        return;
+      }
     }
-    this.startBlankDrag(); // eyeView → type='eyedir'，旋转视线
+    // 画布/空白：取消选中 + 旋转视线（与 select 工具保持一致，避免选中残留）
+    PP.App.selectedId = null;
+    PP.UI.updateSelectionPanel();
+    this.startBlankDrag();
     e.preventDefault();
     return;
   }
@@ -199,10 +217,11 @@ PP.Interaction.onMouseMove = function (e) {
   }
 
   if (this.dragging.type === 'eyedir') {
-    // 人眼视图下：拖动控制视线方向（yaw 水平 360°，pitch 俯仰）
+    // 人眼视图下：拖动控制视线方向（yaw 水平 360°，pitch 俯仰）。
+    // 符号与视口环绕一致：右拖=画面右移、下拖=画面下移（"拖画布=画布跟着走"）
     const speed = 0.005;
-    PP.App.eye.yaw = this.dragging.startYaw - dx * speed;
-    PP.App.eye.pitch = M3.clamp(this.dragging.startPitch - dy * speed, -Math.PI / 2 + 0.01, Math.PI / 2 - 0.01);
+    PP.App.eye.yaw = this.dragging.startYaw + dx * speed;
+    PP.App.eye.pitch = M3.clamp(this.dragging.startPitch + dy * speed, -Math.PI / 2 + 0.01, Math.PI / 2 - 0.01);
     PP.setEyeDir();
     return;
   }
@@ -211,9 +230,10 @@ PP.Interaction.onMouseMove = function (e) {
     const o = (this.dragging.target === 'eye') ? PP.App.eye.pos
       : (this.dragging.target === 'canvas') ? PP.App.canvas.center
       : PP.findCube(this.dragging.id).position;
-    // 屏幕像素 → 世界比例（依据相机距离与视场角）
+    // 屏幕像素 → 世界比例：视口用相机距离；人眼视图相机距离失效，改用 人眼→目标 距离
     const fov = PP.Renderer.fov * Math.PI / 180;
-    const k = (2 * PP.App.camera.dist * Math.tan(fov / 2)) / PP.Renderer.H;
+    const D = PP.App.eyeView ? Math.max(0.1, M3.dist(PP.App.eye.pos, o)) : PP.App.camera.dist;
+    const k = (2 * D * Math.tan(fov / 2)) / PP.Renderer.H;
     const newPos = this.dragAlongScreen(o, { x: dx * k, y: -dy * k }, basis);
     if (this.dragging.target === 'eye') PP.App.eye.pos = newPos;
     else if (this.dragging.target === 'canvas') PP.App.canvas.center = newPos;
@@ -259,13 +279,15 @@ PP.Interaction.onMouseUp = function () {
 
 PP.Interaction.onWheel = function (e) {
   // 侧边栏等 UI 区域交给浏览器原生滚动（不拦截、不 preventDefault）
+  // e.target 可能不是 Node（如 window/document），先做类型判断避免 contains 抛错
   const panel = document.getElementById('panel');
-  if (panel && panel.contains(e.target)) return;
+  const t = e.target;
+  if (panel && t && typeof t.nodeType === 'number' && panel.contains(t)) return;
   e.preventDefault();
   const app = PP.App;
   const sens = app.options.zoomSensitivity;
 
-  // 触控板捏合缩放：macOS 以 ctrlKey + wheel 事件发送（沿用现有行为）
+  // 触控板捏合缩放：macOS 以 ctrlKey + wheel 事件发送（所有工具统一）
   if (e.ctrlKey || e.metaKey) {
     const raw = M3.clamp(e.deltaY, -240, 240);
     const k = Math.exp(raw * sens * 0.0012);
@@ -273,19 +295,18 @@ PP.Interaction.onWheel = function (e) {
     return;
   }
 
-  // 选择工具下启用触控板手势：
-  // 双指滚动 = 旋转视角，Shift+双指滚动 = 平移（与鼠标拖动方向一致）
-  if (app.tool === 'select') {
-    const px = this._wheelPixels(e);
-    // 触控板双指滚动单帧位移很小；物理滚轮一档很大（~100px+），保持原有"仅 Ctrl 缩放"行为
-    const isTrackpad = Math.abs(px.dx) + Math.abs(px.dy) < 80;
-    if (!isTrackpad) return;
+  // 触控板双指手势（所有工具统一）：
+  // 双指滚动 = 旋转视角，Shift+双指滚动 = 平移（与鼠标拖动方向一致）。
+  // 触控板双指滚动单帧位移很小；物理滚轮一档很大（~100px+）→ 走下方缩放分支
+  const px = this._wheelPixels(e);
+  const isTrackpad = Math.abs(px.dx) + Math.abs(px.dy) < 80;
+  if (isTrackpad) {
     if (e.shiftKey) this._trackpadPan(px.dx, px.dy);
     else this._trackpadOrbit(px.dx, px.dy);
     return;
   }
 
-  // 非选择工具：滚轮缩放（原有行为）
+  // 物理滚轮缩放（所有工具统一）
   const raw = M3.clamp(e.deltaY, -240, 240);
   const k = Math.exp(raw * sens * 0.0012);
   app.camera.dist = M3.clamp(app.camera.dist * k, 10, 60);
@@ -306,8 +327,8 @@ PP.Interaction._trackpadOrbit = function (dx, dy) {
   const app = PP.App;
   const speed = 0.005;
   if (app.eyeView) {
-    app.eye.yaw = app.eye.yaw + dx * speed;
-    app.eye.pitch = M3.clamp(app.eye.pitch + dy * speed, -Math.PI / 2 + 0.01, Math.PI / 2 - 0.01);
+    app.eye.yaw = app.eye.yaw - dx * speed;
+    app.eye.pitch = M3.clamp(app.eye.pitch - dy * speed, -Math.PI / 2 + 0.01, Math.PI / 2 - 0.01);
     PP.setEyeDir();
     return;
   }

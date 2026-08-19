@@ -313,6 +313,12 @@ PP.Renderer._ease = function (t) {
   return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2; // easeInOutQuad
 };
 
+// 曲线细分段数：由用户“曲线光滑度”推导（scale 用于不同元素按比例取密度）
+PP.Renderer._curveSeg = function (scale) {
+  const s = PP.App.options.curveSmoothness || 20;
+  return Math.max(3, Math.round(s * scale));
+};
+
 /* ==================== 绘制辅助 ==================== */
 PP.Renderer._sc = function (wp) {
   if (!wp) return null;
@@ -466,7 +472,7 @@ PP.Renderer.drawCubeFaces = function (cube, addDraw) {
     // 鱼眼下表面轮廓也变形：采样 4 条边围成闭合路径再填充
     for (const face of PP.CUBE_FACES) {
       const world = [];
-      const per = 6;
+      const per = this._curveSeg(0.3);
       for (let e = 0; e < 4; e++) {
         const a = verts[face[e]], b = verts[face[(e + 1) % 4]];
         for (let k = 0; k < per; k++) world.push(M3.lerp(a, b, k / per));
@@ -528,7 +534,7 @@ PP.Renderer.drawCubeWireframe = function (cube, addDraw) {
       // 鱼眼下直线投影为曲线：采样 3D 棱 → 逐段裁剪绘制，与画布上的黄色透视图形对齐
       const vA = verts[edge[0]], vB = verts[edge[1]];
       const pts = [];
-      const SEG = 12;
+      const SEG = this._curveSeg(0.6);
       for (let k = 0; k <= SEG; k++) pts.push(M3.lerp(vA, vB, k / SEG));
       this._drawChain(addDraw, pts, (ctx) => {
         ctx.strokeStyle = isSelected ? '#fff' : cube.color;
@@ -615,7 +621,7 @@ PP.Renderer.drawPerspectiveShape = function (cube, addDraw) {
   for (const edge of PP.CUBE_EDGES) {
     const vA = verts[edge[0]], vB = verts[edge[1]];
     const SURF = [];
-    const SEG = 24;
+    const SEG = this._curveSeg(1.2);
     let ok = true;
     for (let k = 0; k <= SEG; k++) {
       const s = M3.lerp(vA, vB, k / SEG); // 3D 边上的采样点
@@ -920,7 +926,7 @@ PP.Renderer._drawInfiniteLineSampled = function (addDraw, anchor, dir, color) {
 
 // 从 anchor 出发、沿 +dir 方向延伸的一条分支：采样点距离按几何级数扩展
 PP.Renderer._drawLineRay = function (addDraw, anchor, dir, color) {
-  const N = 20, t0 = 1.5, tmax = 1e5;
+  const N = this._curveSeg(1), t0 = 1.5, tmax = 1e5;
   const p = Math.pow(tmax / t0, 1 / (N - 1));
   const pts = [anchor];
   let t = t0;

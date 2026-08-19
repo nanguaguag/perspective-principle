@@ -48,6 +48,7 @@ PP.App = {
     showParallelLines: true,
     showVanishingPoints: true,
     zoomSensitivity: 0.5, // 滚动缩放灵敏度（0.05~2）
+    curveSmoothness: 64,  // 鱼眼（球/圆柱）下曲线细分光滑度（4~128）
   },
   warnings: [], // 每帧退化提示
 };
