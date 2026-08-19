@@ -5,6 +5,8 @@
 PP.Interaction = {
   dragging: null, // { type: 'move' | 'rotate' | 'scale' | 'orbit' | 'eyedir' } + 状态
   lastX: 0, lastY: 0,
+  _pinch: null,   // { startDist, startCameraDist } 双指捏合缩放状态
+  _touching: false,
 };
 
 // 命中检测：按优先级取命中（人眼 > 立方体 > 画布），同优先级取更近者
@@ -48,6 +50,82 @@ PP.Interaction.bindEvents = function (canvas) {
   window.addEventListener('mouseup', () => this.onMouseUp());
   window.addEventListener('wheel', (e) => this.onWheel(e), { passive: false });
   window.addEventListener('keydown', (e) => this.onKeydown(e));
+
+  // 触控：单指 = 等价于鼠标操作（移动/旋转/缩放/选中），双指 = 捏合缩放
+  canvas.addEventListener('touchstart', (e) => this.onTouchStart(e), { passive: false });
+  canvas.addEventListener('touchmove', (e) => this.onTouchMove(e), { passive: false });
+  canvas.addEventListener('touchend', (e) => this.onTouchEnd(e), { passive: false });
+  canvas.addEventListener('touchcancel', () => { this.dragging = null; this._pinch = null; this._touching = false; });
+};
+
+/* ==================== 触控事件（映射到鼠标逻辑） ==================== */
+PP.Interaction.onTouchStart = function (e) {
+  e.preventDefault();
+  this._touching = true;
+  if (e.touches.length === 1) {
+    const t = e.touches[0];
+    this._simulateMouse('down', t.clientX, t.clientY);
+  } else if (e.touches.length >= 2) {
+    // 第二根手指落下：取消正在进行的对象拖拽，切换为捏合缩放
+    this.dragging = null;
+    const a = e.touches[0], b = e.touches[1];
+    this._pinch = {
+      startDist: Math.max(1, Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY)),
+      startDistCam: PP.App.camera.dist,
+    };
+  } else {
+    this._touching = e.touches.length > 0;
+  }
+};
+
+PP.Interaction.onTouchMove = function (e) {
+  e.preventDefault();
+  if (!this._touching) return;
+  // 双指：捏合缩放（距离变大为放大，即 dist 减小）
+  if (this._pinch && e.touches.length >= 2) {
+    const a = e.touches[0], b = e.touches[1];
+    const d = Math.max(1, Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY));
+    PP.App.camera.dist = M3.clamp(this._pinch.startDistCam * (this._pinch.startDist / d), 10, 60);
+    return;
+  }
+  if (this._pinch) {
+    // 由双指回到单指：重置起点，避免画面瞬移
+    this.dragging = null; this._pinch = null;
+    const t = e.touches[0];
+    const rect = PP.Renderer.ctx.canvas.getBoundingClientRect();
+    this.lastX = t.clientX - rect.left; this.lastY = t.clientY - rect.top;
+    return;
+  }
+  if (e.touches.length === 1) {
+    const t = e.touches[0];
+    this._simulateMouse('move', t.clientX, t.clientY);
+  }
+};
+
+PP.Interaction.onTouchEnd = function (e) {
+  e.preventDefault();
+  this._pinch = null;
+  if (e.touches.length === 0) {
+    this._touching = false;
+    this._simulateMouse('up', 0, 0);
+  } else if (e.touches.length === 1) {
+    const t = e.touches[0];
+    const rect = PP.Renderer.ctx.canvas.getBoundingClientRect();
+    this.lastX = t.clientX - rect.left; this.lastY = t.clientY - rect.top;
+  }
+};
+
+// 把触控坐标包装成鼠标事件对象，复用现有交互逻辑
+PP.Interaction._simulateMouse = function (type, x, y) {
+  const canvas = PP.Renderer.ctx.canvas;
+  const ev = {
+    clientX: x, clientY: y, button: 0,
+    preventDefault() {},
+    target: canvas,
+  };
+  if (type === 'down') this.onMouseDown(ev);
+  else if (type === 'move') this.onMouseMove(ev);
+  else this.onMouseUp(ev);
 };
 
 PP.Interaction.onMouseDown = function (e) {
@@ -231,9 +309,8 @@ PP.Interaction.onMouseMove = function (e) {
       : (this.dragging.target === 'canvas') ? PP.App.canvas.center
       : PP.findCube(this.dragging.id).position;
     // 屏幕像素 → 世界比例：视口用相机距离；人眼视图相机距离失效，改用 人眼→目标 距离
-    const fov = PP.Renderer.fov * Math.PI / 180;
     const D = PP.App.eyeView ? Math.max(0.1, M3.dist(PP.App.eye.pos, o)) : PP.App.camera.dist;
-    const k = (2 * D * Math.tan(fov / 2)) / PP.Renderer.H;
+    const k = this._worldPerPixel(D);
     const newPos = this.dragAlongScreen(o, { x: dx * k, y: -dy * k }, basis);
     if (this.dragging.target === 'eye') PP.App.eye.pos = newPos;
     else if (this.dragging.target === 'canvas') PP.App.canvas.center = newPos;
@@ -340,19 +417,27 @@ PP.Interaction._trackpadOrbit = function (dx, dy) {
 PP.Interaction._trackpadPan = function (dx, dy) {
   const app = PP.App;
   const basis = PP.Renderer.basis;
-  const fov = PP.Renderer.fov * Math.PI / 180;
   if (app.eyeView) {
     // 人眼视图下平移人眼本身（沿屏幕方向），比例取 人眼→画布 的距离
     const D = M3.dist(app.eye.pos, app.canvas.center);
-    const k = (2 * D * Math.tan(fov / 2)) / PP.Renderer.H;
+    const k = this._worldPerPixel(D);
     const move = M3.add(M3.scale(basis.right, dx * k), M3.scale(basis.up, -dy * k));
     app.eye.pos = M3.add(app.eye.pos, move);
     return;
   }
   const cam = app.camera;
-  const k = (2 * cam.dist * Math.tan(fov / 2)) / PP.Renderer.H;
+  const k = this._worldPerPixel(cam.dist);
   const move = M3.add(M3.scale(basis.right, dx * k), M3.scale(basis.up, -dy * k));
   cam.target = M3.add(cam.target, move);
+};
+
+// 屏幕像素 → 世界距离 的比例。
+// fov 过大会使 tan 发散（尤其人眼视图 fov=2×视锥角，接近 90° 时 tan→∞），
+// 导致拖动物体因换算比例过大而"飞走"。限幅换算用的半视场角以保持可控。
+PP.Interaction._worldPerPixel = function (D) {
+  const fov = PP.Renderer.fov * Math.PI / 180;
+  const half = M3.clamp(fov / 2, 0.05, 55 * Math.PI / 180);
+  return (2 * D * Math.tan(half)) / PP.Renderer.H;
 };
 
 PP.Interaction.onKeydown = function (e) {

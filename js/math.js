@@ -150,8 +150,8 @@ const M3 = (function () {
 
   /* ---------------- 透视投影：点 → 画布（曲面） ---------------- */
   // 人眼 E 看向点 P，连线与画布表面 (C,N) 相交
-  // canvas.shape: 'flat' 平面 | 'sphere' 球(球心=E) | 'cylinder' 圆柱(轴=世界Y,过E)
-  // 返回 { t, point }；若连线无效返回 null
+  // canvas.shape: 'flat' 平面 | 'sphere' 球(球心=E) | 'hemisphere' 半球(球心=E,开口朝+法线)
+  //                'cylinder' 圆柱(轴=画布竖直方向,过E)
   function canvasRadius(E, canvas) {
     return Math.max(0.35, dist(E, canvas.center) * (canvas.size === undefined ? 1 : canvas.size));
   }
@@ -170,12 +170,66 @@ const M3 = (function () {
       // 球心在人眼：射线经 t=R 处与球面相交
       return { t: R, point: add(E, scale(d, R)) };
     }
+    if (shape === 'hemisphere') {
+      // 半球：仅正面半球（开口朝画布法线 +n）有效，背面无交点
+      const n = norm(canvas.normal);
+      if (dot(d, n) < 0) return null;
+      return { t: R, point: add(E, scale(d, R)) };
+    }
     // 圆柱（轴=画布竖直方向 v，过人眼；锁定画布时 v ⊥ 视线）
     const cb = canvasBasis(canvas);
     const lh = Math.hypot(dot(d, cb.u), dot(d, cb.n));
     if (lh < EPS) return null; // 沿柱轴方向，无法确定唯一柱面落点
     const t = R / lh;
     return { t, point: add(E, scale(d, t)) };
+  }
+
+  // 过点 P、方向 dir 的整条直线与画布表面的交点（画布灭点）。
+  // 平面最多 1 个；球/圆柱（中心或轴过人眼）一般 2 个（正反两侧）；
+  // 直线平行于画布（平面=平行于画面，圆柱=沿柱轴）时返回 null，表示无交点。
+  function lineToCanvas(P, dir, canvas) {
+    const shape = canvas.shape || 'flat';
+    if (shape === 'flat') {
+      const n = norm(canvas.normal);
+      const denom = dot(n, dir);
+      if (Math.abs(denom) < EPS) return null; // dir 平行画布平面 → 无交点
+      const t = dot(n, sub(canvas.center, P)) / denom;
+      return [{ t, point: add(P, scale(dir, t)) }];
+    }
+    const R = canvasRadius(P, canvas);
+    if (shape === 'sphere') {
+      // 球心在人眼：直线与球面交于 ±dir 两个对跖点
+      const d = norm(dir);
+      return [
+        { t: R, point: add(P, scale(d, R)) },
+        { t: -R, point: sub(P, scale(d, R)) },
+      ];
+    }
+    if (shape === 'hemisphere') {
+      // 半球（开口朝 +n）：只在正面一侧有交点
+      const n = norm(canvas.normal);
+      const d = norm(dir);
+      if (Math.abs(dot(d, n)) >= 1e-9) {
+        const sign = dot(d, n) >= 0 ? 1 : -1;
+        return [{ t: sign * R, point: add(P, scale(d, sign * R)) }];
+      }
+      // 方向平行于开口平面 → 交点落在半球边缘（赤道）两侧
+      return [
+        { t: R, point: add(P, scale(d, R)) },
+        { t: -R, point: sub(P, scale(d, R)) },
+      ];
+    }
+    // 圆柱（轴=画布竖直 v，过人眼）：点到轴的距离 = |t|·|dir⊥|，令其=R 解 t
+    const cb = canvasBasis(canvas);
+    const dv = dot(dir, cb.v);
+    const perp = sub(dir, scale(cb.v, dv));
+    const lp = len(perp);
+    if (lp < EPS) return null; // dir ∥ 柱轴 → 平行于画布，无交点
+    const t = R / lp;
+    return [
+      { t, point: add(P, scale(dir, t)) },
+      { t: -t, point: add(P, scale(dir, -t)) },
+    ];
   }
 
   /* ---------------- 画布局部坐标 ---------------- */
@@ -205,7 +259,7 @@ const M3 = (function () {
     EPS, UP, v3, add, sub, scale, dot, cross, len, dist, norm, lerp, clamp,
     qIdentity, qAxisAngle, qMul, qRotate, qNorm,
     camSetup, cameraBasis, basisFrom, toCamSpace, projectCam, screenRay,
-    rayPlane, raySphere, rayAABB, rayOBB, projectToCanvas,
+    rayPlane, raySphere, rayAABB, rayOBB, projectToCanvas, lineToCanvas,
     canvasBasis, pointOnCanvas,
   };
 })();

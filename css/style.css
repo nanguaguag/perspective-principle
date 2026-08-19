@@ -53,6 +53,8 @@ button {
   border: none;
   background: none;
   color: inherit;
+  touch-action: manipulation; /* 消除移动端点击/手势的误缩放 */
+  -webkit-tap-highlight-color: transparent;
 }
 
 [hidden] { display: none !important; }
@@ -62,9 +64,13 @@ button {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  height: 100dvh; /* 移动端浏览器地址栏伸缩时更稳 */
   min-width: 560px; /* 极端窄窗口时整页横向滚动，避免面板被挤没 */
   overflow: auto;
 }
+
+/* 移动端面板背板（默认隐藏，仅抽屉打开时显示） */
+#panel-backdrop { display: none; }
 
 /* 顶部应用栏 */
 .appbar {
@@ -125,6 +131,9 @@ button {
 /* 面板内紧凑分段选择器 */
 .seg-sm { margin: 0 0 12px; }
 .seg-sm .segmented-btn { height: 32px; padding: 0 13px; font-size: 13px; }
+/* 预设按钮较多：允许换行，参考 Material segmented 弹性宽度 */
+.seg-wrap { flex-wrap: wrap; justify-content: flex-start; margin: 0 0 12px; }
+.seg-wrap .segmented-btn { flex: 1 1 auto; text-align: center; padding: 0 10px; }
 
 .appbar-actions { display: flex; gap: 10px; white-space: nowrap; }
 
@@ -363,4 +372,79 @@ input[type="range"]::-moz-range-thumb {
 @media (max-width: 900px) {
   .appbar-title { display: none; }
   #panel { width: 288px; }
+}
+
+/* ==================== 移动端优化 ==================== */
+@media (max-width: 768px) {
+  /* 全屏布局：去掉防挤压的最小宽度，改用 100dvh 适配浏览器 UI 伸缩 */
+  #app {
+    min-width: 0;
+    height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  /* 顶部栏：允许横向滚动，压缩间距，隐藏品牌文字 */
+  .appbar {
+    gap: 8px;
+    padding: 0 env(safe-area-inset-right);
+    padding-left: 8px;
+    height: 56px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+  }
+  .appbar::-webkit-scrollbar { display: none; }
+  .appbar-brand { display: none; }
+  .appbar .segmented { margin: 0; flex-shrink: 0; }
+  .appbar-actions { flex-shrink: 0; gap: 6px; }
+  .appbar-actions .m3-btn { padding: 0 12px; height: 38px; }
+  /* “＋ 添加立方体”只保留加号，节省空间 */
+  .appbar-actions .btn-txt { display: none; }
+
+  /* 面板 → 右侧抽屉（悬浮覆盖），默认收起，由 body.mobile-panel-open 控制。
+     top 从应用栏下方开始，保证工具栏（含“☰ 面板”按钮）始终可用 */
+  #panel {
+    position: fixed;
+    top: 56px;
+    right: 0;
+    bottom: 0;
+    height: calc(100dvh - 56px);
+    width: min(84vw, 340px);
+    z-index: 40;
+    transform: translateX(102%);
+    transition: transform .28s ease;
+    box-shadow: var(--md-elev-3);
+    border-left: 1px solid rgba(255, 255, 255, .08);
+  }
+  body.mobile-panel-open #panel { transform: translateX(0); }
+
+  /* 背板：抽屉打开时显示，点击可关闭；同样避开应用栏以便切换工具 */
+  body.mobile-panel-open #panel-backdrop {
+    display: block;
+    position: fixed;
+    top: 56px;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 35;
+    background: rgba(0, 0, 0, .5);
+  }
+
+  /* 画布铺满剩余空间，触控手势交给 JS */
+  #scene { touch-action: none; }
+
+  /* 人眼视图 FAB 移到更易点按的位置 */
+  .fab-eye { left: 16px; bottom: 16px; width: 54px; height: 54px; }
+
+  /* 状态栏：压缩、只保留单行提示 */
+  .statusbar { height: 34px; font-size: 11.5px; padding: 0 10px; }
+
+  /* 面板内控件触控友好 */
+  .m3-switch { padding: 6px 0; }
+  .m3-switch .label { font-size: 15px; }
+  .m3-span { line-height: 1.4; }
+  .seg-sm .segmented-btn { min-height: 36px; }
+  .m3-btn { min-height: 40px; }
 }

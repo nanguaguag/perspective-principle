@@ -55,7 +55,7 @@ PP.Renderer._fisheyeScreen = function (cs) {
   const fovHalf = (this.fov * Math.PI / 180) / 2;
   const shape = PP.App.canvas.shape;
   const aspect = W / H;
-  if (shape === 'sphere') {
+  if (shape === 'sphere' || shape === 'hemisphere') {
     // 等距球面投影：半径按离轴角线性映射，方向角决定屏幕角度
     const z = cs.z;
     if (z <= 1e-4) return null;
@@ -107,7 +107,7 @@ PP.Renderer._fisheyeRay = function (mx, my) {
   const shape = PP.App.canvas.shape;
   const cam = PP.App.camera;
   const origin = M3.v3(cam.pos.x, cam.pos.y, cam.pos.z);
-  if (shape === 'sphere') {
+  if (shape === 'sphere' || shape === 'hemisphere') {
     const dx = mx - W / 2, dy = my - H / 2;
     const rad = Math.hypot(dx, dy);
     const beta = Math.atan2(dy, dx);          // 屏幕 y 向下
@@ -228,6 +228,9 @@ PP.Renderer._renderCore = function () {
   if (sel && app.options.showVanishingPoints) {
     this.drawVanishingPoints(sel, addDraw);
   }
+  if (sel && app.options.showCanvasVanishingPoints) {
+    this.drawCanvasVanishingPoints(sel, addDraw);
+  }
 
   // ---- 9. 人眼 ----
   this.drawEye(addDraw);
@@ -241,6 +244,9 @@ PP.Renderer._renderCore = function () {
     this.drawCanvasLabel(addDraw);
     if (sel && app.options.showVanishingPoints) {
       this.drawVPLabels(sel, addDraw);
+    }
+    if (sel && app.options.showCanvasVanishingPoints) {
+      this.drawCVPLabels(sel, addDraw);
     }
   }
 
@@ -334,6 +340,7 @@ PP.Renderer.drawCanvasPlane = function (addDraw) {
   if (c.size <= 0) return; // size=0 → 隐藏画布
   const shape = c.shape || 'flat';
   if (shape === 'sphere') { this._drawSphereCanvas(addDraw); return; }
+  if (shape === 'hemisphere') { this._drawHemisphereCanvas(addDraw); return; }
   if (shape === 'cylinder') { this._drawCylinderCanvas(addDraw); return; }
   this._drawFlatCanvas(addDraw);
 };
@@ -406,6 +413,33 @@ PP.Renderer._drawSphereCanvas = function (addDraw) {
       pts.push(M3.add(eye.pos, M3.scale(d, R)));
     }
     this._drawRing(addDraw, pts, 'rgba(100,150,255,0.28)');
+  }
+};
+
+// 半球画布（球心=人眼，开口朝画布法线方向）：赤道圆 + 正面经线弧
+PP.Renderer._drawHemisphereCanvas = function (addDraw) {
+  const eye = PP.App.eye;
+  const basis = M3.canvasBasis(PP.App.canvas);
+  const n = basis.n;
+  const R = M3.dist(eye.pos, PP.App.canvas.center) * PP.App.canvas.size;
+  const N = 40;
+  // 赤道（开口边缘）圆：⊥ n 平面内，过球心
+  const eq = [];
+  for (let i = 0; i <= N; i++) {
+    const th = (i / N) * Math.PI * 2;
+    const d = M3.add(M3.scale(basis.u, Math.cos(th)), M3.scale(basis.v, Math.sin(th)));
+    eq.push(M3.add(eye.pos, M3.scale(d, R)));
+  }
+  this._drawRing(addDraw, eq, 'rgba(100,150,255,0.35)');
+  // 正面四条经线弧：从顶端(+n)到赤道，各取 90° 半圆
+  for (const w of [basis.u, M3.scale(basis.u, -1), basis.v, M3.scale(basis.v, -1)]) {
+    const arc = [];
+    for (let i = 0; i <= N / 2; i++) {
+      const phi = (i / (N / 2)) * (Math.PI / 2); // 0..90°
+      const d = M3.add(M3.scale(n, Math.cos(phi)), M3.scale(w, Math.sin(phi)));
+      arc.push(M3.add(eye.pos, M3.scale(d, R)));
+    }
+    this._drawRing(addDraw, arc, 'rgba(100,150,255,0.24)');
   }
 };
 
@@ -1003,6 +1037,8 @@ PP.Renderer._clipSegmentWorld = function (wA, wB) {
 /* ==================== 9. 灭点 ==================== */
 PP.Renderer.drawVanishingPoints = function (cube, addDraw) {
   const app = PP.App;
+  // 人眼视图下视图灭点与画布灭点重合，只保留画布灭点（含标签）避免重叠
+  if (app.eyeView) return;
   const axes = PP.cubeAxes(cube);
   const colors = ['#e67e22', '#27ae60', '#8e44ad'];
   const eye = app.eye;
@@ -1036,6 +1072,66 @@ PP.Renderer.drawVanishingPoints = function (cube, addDraw) {
         ctx.setLineDash([]);
       }
     });
+  }
+};
+
+/* ==================== 9. 画布灭点 ==================== */
+// 画布灭点：与平行线平行且穿过人眼的直线 与 画布表面的交点。
+// 它位于画布上，与“视图灭点”（无穷远点在屏幕上的投影）物理含义不同。
+// 平面画布 1 个；球/圆柱（中心轴过人眼）2 个（对向各一）；平行于画布时无交点。
+// 返回每组方向的可见画布灭点 {x,y,z} 列表（可能为空）
+PP.Renderer._canvasVPsScreen = function (cube) {
+  const app = PP.App;
+  const axes = PP.cubeAxes(cube);
+  const eye = app.eye;
+  const out = [];
+  for (let g = 0; g < 3; g++) {
+    const hits = M3.lineToCanvas(eye.pos, axes[g], app.canvas);
+    const list = [];
+    if (hits) {
+      for (const h of hits) {
+        const s = this._sc(h.point); // 交点本就在画布上，直接投影到屏幕
+        if (s) list.push({ x: s.x, y: s.y, z: s.z });
+      }
+    }
+    out.push(list);
+  }
+  return out;
+};
+
+PP.Renderer.drawCanvasVanishingPoints = function (cube, addDraw) {
+  const app = PP.App;
+  const colors = ['#e67e22', '#27ae60', '#8e44ad'];
+  const eye = app.eye;
+  const eSc = this._sc(eye.pos); // 人眼视图下相机=眼睛，可能为 null（仅略去辅助线）
+  const vps = this._canvasVPsScreen(cube);
+
+  for (let g = 0; g < 3; g++) {
+    const list = vps[g];
+    for (const cvp of list) {
+      addDraw(cvp.z, (ctx) => {
+        // 人眼→画布灭点 构造辅助线（虚线）——可直观看到“穿过人眼、方向平行”的这条线
+        if (eSc) {
+          ctx.setLineDash([3, 4]);
+          ctx.beginPath();
+          ctx.moveTo(eSc.x, eSc.y);
+          ctx.lineTo(cvp.x, cvp.y);
+          ctx.strokeStyle = colors[g] + '3a';
+          ctx.lineWidth = 1;
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+        // 画布灭点：空心方块（区别于实心圆 = 视图灭点）
+        const s = 7;
+        ctx.strokeStyle = colors[g];
+        ctx.lineWidth = 2;
+        ctx.strokeRect(cvp.x - s / 2, cvp.y - s / 2, s, s);
+        ctx.fillStyle = colors[g];
+        ctx.beginPath();
+        ctx.arc(cvp.x, cvp.y, 2, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
   }
 };
 
@@ -1127,6 +1223,8 @@ PP.Renderer.drawCanvasLabel = function (addDraw) {
 };
 
 PP.Renderer.drawVPLabels = function (cube, addDraw) {
+  // 人眼视图下视图灭点已隐藏（与画布灭点重合），标签也随之隐藏
+  if (PP.App.eyeView) return;
   const axes = PP.cubeAxes(cube);
   const colors = ['#e67e22', '#27ae60', '#8e44ad'];
   const dirs = ['X', 'Y', 'Z'];
@@ -1137,5 +1235,18 @@ PP.Renderer.drawVPLabels = function (cube, addDraw) {
     addDraw(vpSc.z, (ctx) => {
       this._drawLabel(ctx, '灭点 ' + dirs[g], vpSc.x, vpSc.y - 18, colors[g]);
     });
+  }
+};
+
+PP.Renderer.drawCVPLabels = function (cube, addDraw) {
+  const colors = ['#e67e22', '#27ae60', '#8e44ad'];
+  const dirs = ['X', 'Y', 'Z'];
+  const vps = this._canvasVPsScreen(cube);
+  for (let g = 0; g < 3; g++) {
+    for (const cvp of vps[g]) {
+      addDraw(cvp.z, (ctx) => {
+        this._drawLabel(ctx, '画布灭点 ' + dirs[g], cvp.x, cvp.y - 18, colors[g]);
+      });
+    }
   }
 };

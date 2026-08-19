@@ -3,6 +3,11 @@
  * ========================================================= */
 PP.UI = {
   elems: {},
+  panelOpen: true, //  桌面端默认展开；移动端抽屉默认收起（由 CSS 控制，与 panelOpen 相对）
+};
+
+PP.UI.isMobile = function () {
+  return window.matchMedia && window.matchMedia('(max-width: 768px)').matches;
 };
 
 PP.UI.bind = function () {
@@ -26,10 +31,12 @@ PP.UI.bind = function () {
   this.elems.optShowLabels = document.getElementById('opt-showLabels');
   this.elems.optShowParallelLines = document.getElementById('opt-showParallelLines');
   this.elems.optShowVanishingPoints = document.getElementById('opt-showVanishingPoints');
+  this.elems.optShowCanvasVanishingPoints = document.getElementById('opt-showCanvasVanishingPoints');
   this.elems.optLockCanvas = document.getElementById('opt-lockCanvas');
   this.elems.canvasSize = document.getElementById('canvasSize');
   this.elems.canvasSizeVal = document.getElementById('canvasSizeVal');
   this.elems.canvasShapeBtns = document.querySelectorAll('#canvasShape .shape-btn');
+  this.elems.presetBtns = document.querySelectorAll('#presets .segmented-btn');
 
   this.elems.selPanel = document.getElementById('sel-panel');
   this.elems.selName = document.getElementById('sel-name');
@@ -50,6 +57,8 @@ PP.UI.bind = function () {
   this.elems.btnDelete.addEventListener('click', () => this.deleteSelected());
   this.elems.btnEyeView.addEventListener('click', () => this.toggleEyeView());
   this.elems.btnTogglePanel.addEventListener('click', () => this.togglePanel());
+  const backd = document.getElementById('panel-backdrop');
+  if (backd) backd.addEventListener('click', () => this.closePanel());
 
   this.elems.optShowSightLine.addEventListener('change', () => this.syncOptions());
   this.elems.optShowFrustum.addEventListener('change', () => this.syncOptions());
@@ -67,6 +76,7 @@ PP.UI.bind = function () {
   this.elems.optShowLabels.addEventListener('change', () => this.syncOptions());
   this.elems.optShowParallelLines.addEventListener('change', () => this.syncOptions());
   this.elems.optShowVanishingPoints.addEventListener('change', () => this.syncOptions());
+  this.elems.optShowCanvasVanishingPoints.addEventListener('change', () => this.syncOptions());
   this.elems.optLockCanvas.addEventListener('change', () => {
     PP.App.canvas.lockToEye = this.elems.optLockCanvas.checked;
   });
@@ -79,17 +89,30 @@ PP.UI.bind = function () {
     btn.addEventListener('click', () => this.setCanvasShape(btn.dataset.shape));
   }
 
+  for (const btn of this.elems.presetBtns) {
+    btn.addEventListener('click', () => this.applyPreset(btn.dataset.preset));
+  }
+
   this.selectTool(PP.App.tool);
   this.syncOptionsToUI();
   this.syncCanvasShape();
   this.updateSelectionPanel();
   this.updateStatus();
+
+  // 移动端初始收起抽屉（panelOpen 置 false，且不加开的状态类）
+  if (this.isMobile()) {
+    this.panelOpen = false;
+    document.body.classList.remove('mobile-panel-open');
+    this.elems.btnTogglePanel.classList.remove('active');
+    this.elems.btnTogglePanel.title = '展开侧边栏';
+  }
 };
 
 // 切换画布形状（平面 / 球形 / 圆柱）
 PP.UI.setCanvasShape = function (shape) {
   PP.App.canvas.shape = shape;
   this.syncCanvasShape();
+  if (this.isMobile()) this.closePanel(); // 切换画布后让出屏幕看效果
 };
 
 PP.UI.syncCanvasShape = function () {
@@ -104,13 +127,34 @@ PP.UI.syncCanvasShape = function () {
   }
 };
 
-// 显示 / 隐藏右侧面板；隐藏后画布占满舞台，需重新适配尺寸
+// 显示 / 隐藏右侧面板。
+// 桌面端用 hidden 属性（画布随之伸缩）；移动端切换为右侧抽屉，用 body 类控制，画布尺寸不变。
 PP.UI.togglePanel = function () {
-  const hidden = !this.elems.panel.hidden;
-  this.elems.panel.hidden = hidden;
-  this.elems.btnTogglePanel.classList.toggle('active', !hidden);
-  this.elems.btnTogglePanel.title = hidden ? '显示侧边栏' : '隐藏侧边栏';
+  this.panelOpen = !this.panelOpen;
+  if (this.isMobile()) {
+    document.body.classList.toggle('mobile-panel-open', this.panelOpen);
+    this.elems.btnTogglePanel.classList.toggle('active', this.panelOpen);
+    this.elems.btnTogglePanel.title = this.panelOpen ? '收起侧边栏' : '展开侧边栏';
+    return;
+  }
+  this.elems.panel.hidden = !this.panelOpen;
+  this.elems.btnTogglePanel.classList.toggle('active', this.panelOpen);
+  this.elems.btnTogglePanel.title = this.panelOpen ? '隐藏侧边栏' : '显示侧边栏';
   PP.Renderer.resize(document.getElementById('scene'));
+};
+
+// 强制收起面板（移动端抽屉），用于场景一键切换后让出视图空间
+PP.UI.closePanel = function () {
+  if (!this.panelOpen) return;
+  this.panelOpen = false;
+  if (this.isMobile()) {
+    document.body.classList.remove('mobile-panel-open');
+  } else {
+    this.elems.panel.hidden = true;
+    PP.Renderer.resize(document.getElementById('scene'));
+  }
+  this.elems.btnTogglePanel.classList.toggle('active', false);
+  this.elems.btnTogglePanel.title = '展开侧边栏';
 };
 
 PP.UI.selectTool = function (tool) {
@@ -131,6 +175,7 @@ PP.UI.syncOptions = function () {
   PP.App.options.showLabels = this.elems.optShowLabels.checked;
   PP.App.options.showParallelLines = this.elems.optShowParallelLines.checked;
   PP.App.options.showVanishingPoints = this.elems.optShowVanishingPoints.checked;
+  PP.App.options.showCanvasVanishingPoints = this.elems.optShowCanvasVanishingPoints.checked;
 };
 
 PP.UI.syncOptionsToUI = function () {
@@ -149,6 +194,7 @@ PP.UI.syncOptionsToUI = function () {
   this.elems.optShowLabels.checked = o.showLabels;
   this.elems.optShowParallelLines.checked = o.showParallelLines;
   this.elems.optShowVanishingPoints.checked = o.showVanishingPoints;
+  this.elems.optShowCanvasVanishingPoints.checked = o.showCanvasVanishingPoints;
   this.elems.optLockCanvas.checked = PP.App.canvas.lockToEye;
   this.elems.canvasSize.value = PP.App.canvas.size;
   this.elems.canvasSizeVal.textContent = Math.round(PP.App.canvas.size * 100) + '%';
@@ -230,11 +276,13 @@ PP.UI.updateSelectionPanel = function () {
     this.elems.selPanel.hidden = true;
     this.elems.optShowParallelLines.disabled = true;
     this.elems.optShowVanishingPoints.disabled = true;
+    this.elems.optShowCanvasVanishingPoints.disabled = true;
     return;
   }
   this.elems.selPanel.hidden = false;
   this.elems.optShowParallelLines.disabled = false;
   this.elems.optShowVanishingPoints.disabled = false;
+  this.elems.optShowCanvasVanishingPoints.disabled = false;
   this.elems.selName.textContent = sel.name;
   this.elems.selSize.textContent = '边长: ' + sel.size.toFixed(2);
 };
@@ -263,14 +311,35 @@ PP.UI.reset = function () {
   this.syncEyeViewButton();
 };
 
+// 一键创建透视场景
+PP.UI.applyPreset = function (name) {
+  PP.applyPreset(name);
+  this.syncOptionsToUI();
+  this.syncCanvasShape();
+  this.updateSelectionPanel();
+  this.updateStatus();
+  this.syncEyeViewButton();
+  if (this.isMobile()) this.closePanel(); // 切完场景收起抽屉，聚焦画布
+};
+
 PP.UI.updateStatus = function () {
-  const toolHint = {
-    select: '选择/查看：点击物体选中或再点取消，点击空白取消选中；拖动旋转视图，Shift+拖动平移；触控板：双指滚动旋转，Shift+双指滚动平移，捏合/滚轮缩放',
-    move: '移动：拖拽人眼/立方体/画布；空白处拖动旋转视图；触控板：双指滚动旋转，Shift+双指滚动平移，捏合/滚轮缩放',
-    rotate: '旋转：按住对象改变方向（人眼=控制视线方向）；空白处拖动旋转视图；触控板：双指滚动旋转，Shift+双指滚动平移，捏合/滚轮缩放',
-    scale: '缩放：按住立方体水平拖动改变大小；空白处拖动旋转视图；触控板：双指滚动旋转，Shift+双指滚动平移，捏合/滚轮缩放',
-  };
-  this.elems.status.textContent = toolHint[PP.App.tool];
+  let hint;
+  if (PP.UI.isMobile()) {
+    hint = {
+      select: '点击物体选中/取消，拖动旋转视图；双指捏合缩放',
+      move: '拖动人眼/立方体/画布；空白处拖动旋转视图；双指捏合缩放',
+      rotate: '拖动对象改变方向；空白处拖动旋转视图；双指捏合缩放',
+      scale: '拖动立方体水平改变大小；空白处拖动旋转视图；双指捏合缩放',
+    }[PP.App.tool];
+  } else {
+    hint = {
+      select: '选择/查看：点击物体选中或再点取消，点击空白取消选中；拖动旋转视图，Shift+拖动平移；触控板：双指滚动旋转，Shift+双指滚动平移，捏合/滚轮缩放',
+      move: '移动：拖拽人眼/立方体/画布；空白处拖动旋转视图；触控板：双指滚动旋转，Shift+双指滚动平移，捏合/滚轮缩放',
+      rotate: '旋转：按住对象改变方向（人眼=控制视线方向）；空白处拖动旋转视图；触控板：双指滚动旋转，Shift+双指滚动平移，捏合/滚轮缩放',
+      scale: '缩放：按住立方体水平拖动改变大小；空白处拖动旋转视图；触控板：双指滚动旋转，Shift+双指滚动平移，捏合/滚轮缩放',
+    }[PP.App.tool];
+  }
+  this.elems.status.textContent = hint;
   const w = PP.App.warnings;
   this.elems.info.textContent = w.length ? w.join('；') : '';
 };

@@ -20,7 +20,7 @@ PP.App = {
     h: 9,
     size: 1,          // 画布显示大小（0~2，0 = 隐藏画布）
     lockToEye: true,
-    shape: 'flat',    // 'flat' 平面 | 'sphere' 球形 | 'cylinder' 圆柱（模拟鱼眼透视）
+    shape: 'flat',    // 'flat' 平面 | 'sphere' 球形 | 'hemisphere' 半球 | 'cylinder' 圆柱（鱼眼透视）
   },
   cubes: [],
   camera: {
@@ -47,6 +47,7 @@ PP.App = {
     showLabels: true,
     showParallelLines: true,
     showVanishingPoints: true,
+    showCanvasVanishingPoints: true,
     zoomSensitivity: 0.5, // 滚动缩放灵敏度（0.05~2）
     curveSmoothness: 64,  // 鱼眼（球/圆柱）下曲线细分光滑度（4~128）
   },
@@ -151,4 +152,85 @@ PP.resetScene = function () {
   PP.App.eyeViewAnim = null;
   PP.App.camOrbit = null;
   PP.addCube(M3.v3(0, 1.5, -1));
+};
+
+/* ==================== 透视预设：一键创建典型场景 ==================== */
+// 一点/两点/三点：平面画布；四点：圆柱；五点：半球；六点：球。
+// 统一让眼睛看向 -z（画布法线朝 +z），便于计算各种"平行于画面/圆柱轴"的关系。
+PP.PRESET_CAMERA = { target: M3.v3(0, 2, 3), yaw: 0.6, pitch: 0.35, dist: 24, fov: 45 };
+
+PP.applyPreset = function (name) {
+  const app = PP.App;
+  // 清空场景与视图态
+  app.cubes.length = 0;
+  app.cubeCounter = 0;
+  app.selectedId = null;
+  app.eyeView = false;
+  app.eyeViewAnim = null;
+  app.camOrbit = null;
+  app.tool = 'select';
+
+  // 统一人眼与相机
+  Object.assign(app.eye, { pos: M3.v3(0, 4, 12), yaw: Math.PI, pitch: 0 });
+  PP.setEyeDir(); // dir = (0,0,-1)
+  Object.assign(app.camera, PP.PRESET_CAMERA);
+
+  const c = app.canvas;
+  c.w = 12; c.h = 9; c.size = 1;
+
+  const add = (pos, quat, size) => {
+    app.cubeCounter += 1;
+    const col = CUBE_COLORS[(app.cubeCounter - 1) % CUBE_COLORS.length];
+    const cube = {
+      id: 'cube-' + app.cubeCounter,
+      name: '立方体' + app.cubeCounter,
+      position: M3.v3(pos.x, pos.y, pos.z),
+      quat: quat || M3.qIdentity(),
+      size: size || 1.6,
+      color: col,
+    };
+    app.cubes.push(cube);
+    return cube;
+  };
+
+  if (name === 'one') {
+    // 一点透视：6~7 个平行正方体，大小随机；x/y 平行画面，z 收于一点
+    c.shape = 'flat'; c.center = M3.v3(0, 2, 6); c.normal = M3.v3(0, 0, 1); c.lockToEye = false;
+    const spots = [
+      [-3.2, 3.2], [-1.6, 3.2], [0, 3.2], [1.6, 3.2], [3.2, 3.2],
+      [-2.4, 1.3], [2.2, 1.3],
+    ];
+    for (const [x, z] of spots) {
+      add(M3.v3(x, 1.6, z), M3.qIdentity(), 1.2 + Math.random() * 1.1);
+    }
+  } else if (name === 'two') {
+    // 两点透视：绕竖直轴旋转，仅 y 轴平行画面，x/z 各收敛到一个灭点
+    c.shape = 'flat'; c.center = M3.v3(0, 2, 6); c.normal = M3.v3(0, 0, 1); c.lockToEye = false;
+    const q = M3.qAxisAngle(M3.UP, -40 * Math.PI / 180);
+    add(M3.v3(0, 1.6, 2.6), q, 2.2);
+  } else if (name === 'three') {
+    // 三点透视：绕三个轴复合旋转，无任何轴平行于画面
+    c.shape = 'flat'; c.center = M3.v3(0, 2, 6); c.normal = M3.v3(0, 0, 1); c.lockToEye = false;
+    const qy = M3.qAxisAngle(M3.UP, 22 * Math.PI / 180);
+    const qx = M3.qAxisAngle(M3.v3(1, 0, 0), 18 * Math.PI / 180);
+    const qz = M3.qAxisAngle(M3.v3(0, 0, 1), 12 * Math.PI / 180);
+    add(M3.v3(0, 1.6, 2.6), M3.qNorm(M3.qMul(qy, M3.qMul(qx, qz))), 2.2);
+  } else if (name === 'four') {
+    // 四点透视：圆柱画布，立方体边平行于圆柱长轴（此处轴=竖直）→ y 不收敛，水平方向绕柱面收敛
+    c.shape = 'cylinder'; c.center = M3.v3(0, 4, 9); c.lockToEye = true;
+    add(M3.v3(0, 2, 2), M3.qIdentity(), 1.8);
+  } else if (name === 'five') {
+    // 五点透视：半球画布（开口朝视线正前方）
+    c.shape = 'hemisphere'; c.center = M3.v3(0, 2, 4); c.lockToEye = true;
+    add(M3.v3(0, 3, -1), M3.qIdentity(), 1.8);
+  } else if (name === 'six') {
+    // 六点透视：球形画布
+    c.shape = 'sphere'; c.center = M3.v3(0, 2, 4); c.lockToEye = true;
+    add(M3.v3(0, 3, -1), M3.qIdentity(), 1.8);
+  }
+
+  // 选中第一个立方体，便于立即展示平行线与灭点
+  if (!app.selectedId && app.cubes.length) app.selectedId = app.cubes[0].id;
+  c.normal = M3.norm(c.normal);
+  PP.updateCanvasNormal();
 };
