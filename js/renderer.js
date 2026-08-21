@@ -221,10 +221,12 @@ PP.Renderer._renderCore = function () {
   }
 
   // ---- 8. 平行线与灭点 ----
-  const sel = PP.getSelectedCube();
-  if (sel && app.options.showParallelLines) {
-    this.drawParallelLines(sel, addDraw);
+  // 多选：每个选中物体各显示三色平行线；灭点/画布灭点仅单选时显示，避免画面混乱
+  const sels = PP.getSelectedCubes();
+  if (sels.length && app.options.showParallelLines) {
+    for (const s of sels) this.drawParallelLines(s, addDraw);
   }
+  const sel = sels.length === 1 ? sels[0] : null;
   if (sel && app.options.showVanishingPoints) {
     this.drawVanishingPoints(sel, addDraw);
   }
@@ -562,7 +564,7 @@ PP.Renderer._projectPath = function (worldPts) {
 PP.Renderer.drawCubeWireframe = function (cube, addDraw) {
   const verts = PP.cubeVertices(cube);
   const fisheye = PP.App.eyeView && (PP.App.canvas.shape || 'flat') !== 'flat';
-  const isSelected = PP.App.selectedId === cube.id;
+  const isSelected = (PP.App.selectedIds || []).includes(cube.id);
   for (const edge of PP.CUBE_EDGES) {
     if (fisheye) {
       // 鱼眼下直线投影为曲线：采样 3D 棱 → 逐段裁剪绘制，与画布上的黄色透视图形对齐
@@ -611,7 +613,8 @@ PP.Renderer.drawProjectionLines = function (cube, addDraw) {
 
   for (const v of verts) {
     const res = M3.projectToCanvas(v, eyePos, plane);
-    if (!res || res.t < 0) continue;
+    // 画布在人眼后方时交点 t<0（倒像），同样是有效投影，勿丢弃
+    if (!res) continue;
     // 交点
     const pSc = this._sc(res.point);
     const vSc = this._sc(v);
@@ -660,7 +663,8 @@ PP.Renderer.drawPerspectiveShape = function (cube, addDraw) {
     for (let k = 0; k <= SEG; k++) {
       const s = M3.lerp(vA, vB, k / SEG); // 3D 边上的采样点
       const pr = M3.projectToCanvas(s, eyePos, plane);
-      if (!pr || pr.t < 0) { ok = false; break; }
+      // 画布在人眼后方时投影为倒像（t<0），仍有效；仅视线平行画布（无交点）才跳过
+      if (!pr) { ok = false; break; }
       SURF.push(pr.point);
     }
     if (!ok) continue;
@@ -711,19 +715,29 @@ PP.Renderer.drawFrustum = function (addDraw) {
   const eSc = this._sc(eye.pos);
   if (!eSc) return;
 
-  // 锥母线方向在画布表面上的落点 → 环绕成锥底曲线（扁平面/球/圆柱各不相同）
-  const basis = M3.canvasBasis(plane);
+  // 锥母线方向在画布表面上的落点 → 环绕成锥底曲线（扁平面/球/圆柱各不相同）。
+  // 视锥（cone of vision）以视线为轴：中心轴 = 人眼视线方向 eye.dir。
+  // 不能用画布法线（lockToEye=false 时法线可能背离视线 → 视锥反向/消失）；
+  // 也不能用人眼→画布中心（画布可偏离视线 → 锥轴与视线箭头不重合，看似画歪）。
+  const axis = M3.norm(eye.dir);
+  if (M3.len(axis) < M3.EPS) return;
+  let u = M3.cross(axis, M3.UP);
+  if (M3.len(u) < M3.EPS) u = M3.v3(1, 0, 0);
+  u = M3.norm(u);
+  const v = M3.norm(M3.cross(axis, u));
+
   const nSamples = 48;
   const raw = [];
   for (let i = 0; i < nSamples; i++) {
     const th = (i / nSamples) * Math.PI * 2;
     const d = M3.norm(M3.add(
-      M3.scale(basis.n, Math.cos(angle)),
-      M3.add(M3.scale(basis.u, Math.sin(angle) * Math.cos(th)), M3.scale(basis.v, Math.sin(angle) * Math.sin(th)))
+      M3.scale(axis, Math.cos(angle)),
+      M3.add(M3.scale(u, Math.sin(angle) * Math.cos(th)), M3.scale(v, Math.sin(angle) * Math.sin(th)))
     ));
     const far = M3.add(eye.pos, M3.scale(d, 1000));
     const hit = M3.projectToCanvas(far, eye.pos, plane);
-    if (!hit || hit.t < 0) { raw.push(null); continue; }
+    // 平面画布下母线反向延长线也可能与画布相交（t<0），这正是锥底曲线的一部分，勿丢弃
+    if (!hit) { raw.push(null); continue; }
     const s = this._sc(hit.point);
     raw.push(s);
   }

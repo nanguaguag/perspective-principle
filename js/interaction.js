@@ -129,6 +129,7 @@ PP.Interaction._simulateMouse = function (type, x, y) {
 };
 
 PP.Interaction.onMouseDown = function (e) {
+  this._pending = null; // 重置 Shift 点击/拖动延迟判定
   const rect = PP.Renderer.ctx.canvas.getBoundingClientRect();
   const mx = e.clientX - rect.left, my = e.clientY - rect.top;
   this.lastX = mx; this.lastY = my;
@@ -151,9 +152,10 @@ PP.Interaction.onMouseDown = function (e) {
   if (PP.App.eyeView) {
     if (tool === 'select') {
       if (pick && pick.type === 'cube') {
-        PP.App.selectedId = (PP.App.selectedId === pick.id) ? null : pick.id;
+        if (e.shiftKey) this.toggleMultiSelect(pick.id);
+        else PP.setSelected([pick.id]); // 普通点击=单选；再次点击已选物体保持选中
       } else {
-        PP.App.selectedId = null; // 点击画布/空白都取消选中
+        PP.setSelected([]); // 点击画布/空白都取消选中
       }
       PP.UI.updateSelectionPanel();
       this.startBlankDrag(); // eyeView → type='eyedir'，旋转视线
@@ -162,7 +164,7 @@ PP.Interaction.onMouseDown = function (e) {
     }
     // 移动/旋转/缩放：命中立方体 → 对象级操作
     if (pick && pick.type === 'cube') {
-      PP.App.selectedId = pick.id;
+      PP.setSelected([pick.id]);
       PP.UI.updateSelectionPanel();
       if (tool === 'move') {
         this.dragging = { type: 'move', target: 'cube', id: pick.id };
@@ -188,30 +190,32 @@ PP.Interaction.onMouseDown = function (e) {
       }
     }
     // 画布/空白：取消选中 + 旋转视线（与 select 工具保持一致，避免选中残留）
-    PP.App.selectedId = null;
+    PP.setSelected([]);
     PP.UI.updateSelectionPanel();
     this.startBlankDrag();
     e.preventDefault();
     return;
   }
 
-  // 选择工具：Shift=平移；左键拖动=旋转视图；点击=选中/切换/取消
+  // 选择工具：Shift+点击=多选切换，Shift+拖动=平移；左键拖动=旋转视图；点击=选中
   if (tool === 'select') {
     if (e.shiftKey) {
-      // Shift+拖动 → 平移视点（沿屏幕右/上方向移动 target）
-      this.dragging = {
-        type: 'pan',
+      // 点击/平移二义：先记录 pending，等 mouseup（未移动=点击）或 mousemove（移动=平移）判定
+      this._pending = {
+        shift: true,
+        pick,
+        x: mx, y: my,
         startTarget: M3.v3(PP.App.camera.target.x, PP.App.camera.target.y, PP.App.camera.target.z),
       };
       e.preventDefault();
       return;
     }
     if (pick && pick.type === 'cube') {
-      // 点击物体 → 选中；若已选中 → 取消（切换）
-      PP.App.selectedId = (PP.App.selectedId === pick.id) ? null : pick.id;
+      // 普通点击 → 单选该物体
+      PP.setSelected([pick.id]);
     } else if (!pick) {
       // 点击空白 → 取消选中
-      PP.App.selectedId = null;
+      PP.setSelected([]);
     }
     PP.UI.updateSelectionPanel();
     this.startBlankDrag(); // 拖动旋转视图 / 人眼视图下转视线
@@ -221,7 +225,7 @@ PP.Interaction.onMouseDown = function (e) {
 
   // 点击立方体 → 选中（任何工具下都生效）
   if (pick && pick.type === 'cube') {
-    PP.App.selectedId = pick.id;
+    PP.setSelected([pick.id]);
     PP.UI.updateSelectionPanel();
   }
 
@@ -254,11 +258,21 @@ PP.Interaction.onMouseDown = function (e) {
 
   // 空白处：取消选中 + 旋转视图（人眼视图下旋转视线方向）
   if (!pick) {
-    PP.App.selectedId = null;
+    PP.setSelected([]);
     PP.UI.updateSelectionPanel();
   }
   this.startBlankDrag();
   e.preventDefault();
+};
+
+// Shift+点击：切换该物体的多选状态（已在集合中→移除，否则加入）
+PP.Interaction.toggleMultiSelect = function (id) {
+  const ids = PP.App.selectedIds || [];
+  if (ids.includes(id)) {
+    PP.setSelected(ids.filter((i) => i !== id));
+  } else {
+    PP.setSelected(ids.concat([id]));
+  }
 };
 
 // 空白处拖动的通用入口：人眼视图下旋转视线，否则环绕视图
@@ -271,9 +285,15 @@ PP.Interaction.startBlankDrag = function () {
 };
 
 PP.Interaction.onMouseMove = function (e) {
-  if (!this.dragging) return;
   const rect = PP.Renderer.ctx.canvas.getBoundingClientRect();
   const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+  // Shift 待定（点击/平移二义）：一旦移动超过阈值即升级为平移，否则保持点击候选
+  if (this._pending && this._pending.shift && Math.hypot(mx - this._pending.x, my - this._pending.y) > 4) {
+    const p = this._pending;
+    this._pending = null;
+    this.dragging = { type: 'pan', startTarget: p.startTarget };
+  }
+  if (!this.dragging) return;
   const dx = mx - this.lastX, dy = my - this.lastY;
   const basis = PP.Renderer.basis;
 
@@ -351,6 +371,17 @@ PP.Interaction.onMouseMove = function (e) {
 };
 
 PP.Interaction.onMouseUp = function () {
+  // Shift+点击（未移动成拖动）→ 多选切换
+  if (this._pending && this._pending.shift) {
+    const p = this._pending;
+    this._pending = null;
+    if (p.pick && p.pick.type === 'cube') {
+      this.toggleMultiSelect(p.pick.id);
+    } else {
+      PP.setSelected([]); // Shift+点击空白 → 清空
+    }
+    PP.UI.updateSelectionPanel();
+  }
   this.dragging = null;
 };
 
@@ -442,13 +473,16 @@ PP.Interaction._worldPerPixel = function (D) {
 
 PP.Interaction.onKeydown = function (e) {
   if (e.key === 'Delete' || e.key === 'Backspace') {
-    if (PP.App.selectedId) {
-      PP.removeCube(PP.App.selectedId);
-      PP.UI.updateSelectionPanel();
+    // 删除全部选中物体（支持多选）
+    const ids = PP.App.selectedIds || [];
+    for (const id of ids) {
+      if (PP.findCube(id)) PP.removeCube(id);
     }
+    PP.setSelected([]);
+    PP.UI.updateSelectionPanel();
   }
   if (e.key === 'Escape') {
-    PP.App.selectedId = null;
+    PP.setSelected([]);
     PP.UI.updateSelectionPanel();
   }
 };

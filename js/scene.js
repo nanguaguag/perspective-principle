@@ -33,6 +33,7 @@ PP.App = {
   },
   tool: 'select',
   selectedId: null,
+  selectedIds: [], // 多选集合（selectedId 为其主选中/最近点击，兼容既有逻辑）
   cubeCounter: 0,
   // 人眼视图（透视学视角）：eyeView = 是否锁定，eyeViewAnim = 过渡动画
   eyeView: false,
@@ -76,17 +77,31 @@ PP.addCube = function (pos) {
     color: CUBE_COLORS[(PP.App.cubeCounter - 1) % CUBE_COLORS.length],
   };
   PP.App.cubes.push(cube);
-  PP.App.selectedId = cube.id;
+  PP.setSelected([cube.id]); // 新建即选中（单选）
   return cube;
 };
 
 PP.removeCube = function (id) {
   PP.App.cubes = PP.App.cubes.filter((c) => c.id !== id);
-  if (PP.App.selectedId === id) PP.App.selectedId = null;
+  PP.App.selectedIds = PP.App.selectedIds.filter((sid) => sid !== id);
+  if (PP.App.selectedId === id) PP.App.selectedId = PP.App.selectedIds.length ? PP.App.selectedIds[PP.App.selectedIds.length - 1] : null;
+};
+
+// 统一设置选择集合：selectedIds + 主选中 selectedId（最后一项 = 最近点击）
+PP.setSelected = function (ids) {
+  const app = PP.App;
+  app.selectedIds = ids.slice();
+  app.selectedId = app.selectedIds.length ? app.selectedIds[app.selectedIds.length - 1] : null;
 };
 
 PP.getSelectedCube = function () {
   return PP.App.cubes.find((c) => c.id === PP.App.selectedId) || null;
+};
+
+// 多选集合中仍存在的立方体
+PP.getSelectedCubes = function () {
+  const ids = PP.App.selectedIds || [];
+  return PP.App.cubes.filter((c) => ids.includes(c.id));
 };
 
 PP.findCube = function (id) {
@@ -143,6 +158,7 @@ PP.resetScene = function () {
   PP.App.cubes.length = 0;
   PP.App.cubeCounter = 0;
   PP.App.selectedId = null;
+  PP.App.selectedIds = [];
   Object.assign(PP.App.eye, { pos: M3.v3(0, 3.5, 10), yaw: Math.PI, pitch: -0.4228 });
   PP.setEyeDir();
   Object.assign(PP.App.canvas, { center: M3.v3(0, 1.6, 3), normal: M3.v3(0, 0, 1), w: 12, h: 9, size: 1, lockToEye: true, shape: 'flat' });
@@ -165,6 +181,7 @@ PP.applyPreset = function (name) {
   app.cubes.length = 0;
   app.cubeCounter = 0;
   app.selectedId = null;
+  app.selectedIds = [];
   app.eyeView = false;
   app.eyeViewAnim = null;
   app.camOrbit = null;
@@ -230,7 +247,7 @@ PP.applyPreset = function (name) {
   }
 
   // 选中第一个立方体，便于立即展示平行线与灭点
-  if (!app.selectedId && app.cubes.length) app.selectedId = app.cubes[0].id;
+  if (!app.selectedId && app.cubes.length) PP.setSelected([app.cubes[0].id]);
   c.normal = M3.norm(c.normal);
   PP.updateCanvasNormal();
 };
